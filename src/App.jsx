@@ -82,45 +82,73 @@ async function callLLM(sys, usr, webSearch=false) {
   return d.choices?.[0]?.message?.content?.trim()||"";
 }
 
-// ── Agent 1: Web Search — fetch latest CEO news ─────────────────────────────
+// ── Agent 1: CEO News — dual-call strategy (web search + model knowledge) ────
 async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
 
   const sys = `You are a corporate intelligence analyst. Today is ${today}.
-Your job: find the most current CEO information for a company.
-If web search is available, use it. Otherwise use your most recent training knowledge.
-Always prefer the MOST RECENT data over older historical facts.`;
+Your sole task: find the most current CEO succession facts for the company given.
+Use ALL available knowledge — web search results, press releases, news articles, company announcements.
+Today is ${today} — any news up to and including today is relevant.`;
 
-  const prompt = `Find the latest CEO information for: "${company}"
-Today's date: ${today}
+  const prompt = `Company: "${company}"
+Today: ${today}
 
-Answer each question precisely:
+Search thoroughly and answer each question with FULL NAMES and SPECIFIC DATES:
 
-Q1. CURRENT CEO — Who is the CEO right now? (Full first + last name, start date)
-Q2. RECENT CHANGE — Has the CEO changed in ${yr-1} or ${yr}? (Yes/No. If yes: old CEO name, new CEO name, date of change)
-Q3. DEPARTURE ANNOUNCED — Has any CEO formally announced they are leaving/retiring/stepping down? (Yes/No. If yes: name + date)
-Q4. SUCCESSOR NAMED — Has a specific named person been announced as the next CEO? (Yes/No. If yes: their FULL NAME, their current/previous role, expected start date)
+Q1. CURRENT CEO
+Who is the CEO of "${company}" RIGHT NOW as of ${today}?
+→ Full name + date they became CEO
 
-Rules:
-- Always give FULL names (first + last)
-- If a CEO change happened recently, report the NEW CEO as current
-- If a successor has been named in any press release or announcement, report their full name in Q4
-- Be specific with dates (month + year if possible)`;
+Q2. CEO CHANGE IN ${yr-1}–${yr}
+Has the CEO changed in the last 18 months?
+→ Yes/No. If yes: departing CEO full name, incoming CEO full name, date of change
 
+Q3. DEPARTURE ANNOUNCED
+Has the current CEO formally announced they are leaving, retiring, or stepping down?
+→ Yes/No. If yes: name + announcement date + effective departure date
+
+Q4. NAMED SUCCESSOR
+Has a specific person been publicly named as the next CEO?
+→ Yes/No. If yes: their FULL NAME + current role/background + expected start date
+→ Check: company press releases, board announcements, regulatory filings, news articles
+
+Q5. TRANSITION STATUS
+Is this company currently mid-transition? (i.e. old CEO leaving, new one starting soon)
+→ Yes/No. Brief description if yes.
+
+IMPORTANT:
+- Give FULL first and last names — never just a surname
+- If you found this in a news article or press release, say so
+- Do NOT say "not found" or "no information" if you have any relevant knowledge
+- Recent announcements (even from this week or today) are valid`;
+
+  // Call 1: with web search plugin
+  let webResult = "";
   try {
-    const result = await callLLM(sys, prompt, true);
-    if (result && result.length > 40) return result;
-    throw new Error("empty");
-  } catch {
-    try {
-      return await callLLM(sys, prompt, false);
-    } catch {
-      return `No recent CEO news found for ${company}.`;
-    }
-  }
-}
+    webResult = await callLLM(sys, prompt, true);
+  } catch { webResult = ""; }
 
+  // Call 2: model knowledge directly (no web search)
+  let modelResult = "";
+  try {
+    modelResult = await callLLM(sys, prompt, false);
+  } catch { modelResult = ""; }
+
+  // Merge: prefer web result if it has content, otherwise use model result
+  // If both have content, combine them so research agent sees both
+  if (webResult && webResult.length > 50 && modelResult && modelResult.length > 50) {
+    return `WEB SEARCH RESULT:
+${webResult}
+
+MODEL KNOWLEDGE:
+${modelResult}`;
+  }
+  if (webResult && webResult.length > 50) return webResult;
+  if (modelResult && modelResult.length > 50) return modelResult;
+  return `No CEO news found for ${company}.`;
+}
 // ── Agent 2: Research — build full CEO profile from news + training data ──────
 async function agentResearch(company, ticker, webCtx) {
   const today = new Date().toDateString();
@@ -148,9 +176,13 @@ Return ONLY valid JSON. No markdown, no extra text.`,
 Ticker: ${ticker||"N/A"}
 Today: ${today}
 
-━━━ CEO NEWS CONTEXT (most recent — treat as ground truth) ━━━
+━━━ CEO NEWS CONTEXT (treat as authoritative — overrides training data) ━━━
 ${webCtx}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+READ THE ABOVE CAREFULLY BEFORE FILLING THE JSON.
+If the context contains Q4 answer with a name → that name MUST go in incoming_ceo_name.
+If the context says "transition underway" or "mid-transition" → set both flags to "yes".
 
 MAPPING RULES — extract from the news context above:
 
