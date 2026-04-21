@@ -485,7 +485,7 @@ Industry: ${industry.view} — ${JSON.stringify(industry.concerns)}
 ${JSON.stringify(data.leadership_signals)}
 
 Return this JSON:
-{"prediction":"","confidence":"","analytical_rationale":""}
+{"prediction":"","confidence":"","analytical_rationale":"","investor_impact":"High negative|Moderate negative|Neutral|Positive"}
 
 ━━━ CLASSIFICATION RULES (apply in order, stop at first match) ━━━
 1. age >= 65                                     → high_likelihood
@@ -520,6 +520,7 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
   r.prediction          = cl(r.prediction||"low_likelihood", 3);
   r.confidence          = cl(r.confidence||"low", 2);
   r.analytical_rationale = cl(r.analytical_rationale||"", 80);
+  r.investor_impact      = cl(r.investor_impact||"", 8);
   return r;
 }
 // ── Full pipeline ─────────────────────────────────────────────────────────────
@@ -555,10 +556,24 @@ async function runPipeline(company, ticker, log) {
     board_refreshed_2yr:data.board_refreshed_2yr, activist_investors:data.activist_investors,
     press_controversies:joinCompact(press.controversies," | ",30),
     investor_activism:press.investor_activism, mandate_signals:data.mandate_signals,
+    // Risk signals
+    key_risks:lst(data.press_activism_signals,4,25),
+    mitigating_factors:lst(finance.signals,3,25),
+    succession_signals:lst(data.leadership_signals,4,20),
+    // Agent data
     leadership_signals:data.leadership_signals, financial_signals:data.financial_signals,
     press_signals:press.signals, industry_signals:industry.signals,
     finance_view:finance.view, press_view:press.view, industry_view:industry.view,
     finance_concerns:finance.concerns, press_concerns:press.concerns, industry_concerns:industry.concerns,
+    // Extra insight fields
+    tsr_3yr:data.tsr_3yr,
+    performance_trajectory:data.performance_trajectory||"",
+    m_and_a_activity:data.m_and_a_activity||"",
+    regulatory_scrutiny:data.regulatory_scrutiny||"",
+    succession_plan_disclosed:data.succession_plan_disclosed||"",
+    coo_or_president_appointed:data.coo_or_president_appointed||"",
+    board_refreshed_2yr:data.board_refreshed_2yr||"",
+    investor_impact:pred.investor_impact||"",
   };
 }
 
@@ -680,6 +695,7 @@ function Detail({r}){
 
         {tab==="overview"&&(
           <div>
+            {/* ── Top insight strip ── */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
               <KV label="Prediction" val={PRED_LABEL[r.prediction]||r.prediction} hi={isHigh}/>
               <KV label="Confidence" val={r.confidence} hi={isHigh}/>
@@ -688,28 +704,104 @@ function Detail({r}){
               <KV label="TSR 3yr" val={!ni(r.tsr_3yr)?r.tsr_3yr:""}/>
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
             </div>
-            {r.ceo_departure_announced==="yes"&&(
-              <div style={{background:C.r20,border:`1px solid rgba(204,0,0,0.3)`,borderRadius:9,padding:"11px 13px",marginBottom:10}}>
-                <SH>CEO Departure Announced</SH>
-                <div style={{fontSize:13,color:C.redD}}>{r.incoming_ceo_announced==="yes"?`Successor: ${r.incoming_ceo_name} (${r.incoming_ceo_background}), starting ${r.incoming_ceo_start_date}.`:"Successor has not yet been named."}</div>
+
+            {/* ── CEO Insight bar ── */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+              <KV label="CEO Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
+              <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
+              <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)&&["202","expir"].some(k=>String(r.ceo_contract_expiry).toLowerCase().includes(k))}/>
+              <KV label="Activist Investors" val={!ni(r.activist_investors)&&r.activist_investors!=="None identified"?r.activist_investors:""} hi={!ni(r.activist_investors)&&r.activist_investors!=="None identified"&&r.activist_investors!=="none"&&r.activist_investors!=="no"}/>
+            </div>
+
+            {/* ── Performance bar ── */}
+            {(!ni(r.performance_trajectory)||!ni(r.m_and_a_activity)||!ni(r.regulatory_scrutiny)||r.coo_or_president_appointed)&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+                <KV label="Performance" val={!ni(r.performance_trajectory)?r.performance_trajectory:""}/>
+                <KV label="M&A Activity" val={!ni(r.m_and_a_activity)?r.m_and_a_activity:""}/>
+                <KV label="Regulatory" val={!ni(r.regulatory_scrutiny)?r.regulatory_scrutiny:""}/>
+                <KV label="COO / Successor" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
               </div>
             )}
-            {r.press_controversies&&!ni(r.press_controversies)&&(
-              <div style={{background:C.r10,border:`1px solid rgba(204,0,0,0.15)`,borderRadius:9,padding:"11px 13px",marginBottom:10}}>
-                <SH>Press &amp; Activism</SH>
-                <div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.press_controversies}</div>
+
+            {/* ── CEO Transition Alert ── */}
+            {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&(
+              <div style={{background:C.r20,border:`1px solid rgba(204,0,0,0.35)`,borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+                <SH>CEO Transition Alert</SH>
+                {r.ceo_departure_announced==="yes"&&<div style={{fontSize:13,color:C.redD,marginBottom:4}}>⚠ Departure announced: {r.ceo_name} is leaving.</div>}
+                {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"
+                  ?<div style={{fontSize:13,color:C.redD}}>✓ Successor named: <strong>{r.incoming_ceo_name}</strong>{r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}{r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` (starts ${r.incoming_ceo_start_date})`:""}</div>
+                  :r.incoming_ceo_announced==="yes"&&<div style={{fontSize:13,color:C.redD}}>Successor not yet publicly named.</div>
+                }
               </div>
             )}
+
+            {/* ── Key Risks + Mitigating side by side ── */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div style={{background:C.r10,border:`1px solid rgba(204,0,0,0.15)`,borderRadius:9,padding:"12px 14px"}}>
+                <SH>Key Risks</SH>
+                {r.key_risks?.length>0
+                  ?<Blist items={r.key_risks} col={C.red}/>
+                  :<Blist items={r.leadership_signals?.length>0?r.leadership_signals:["No specific risk signals identified"]} col={C.red}/>
+                }
+              </div>
+              <div style={{background:C.okBg,border:`1px solid rgba(13,154,94,0.2)`,borderRadius:9,padding:"12px 14px"}}>
+                <SH>Mitigating Factors</SH>
+                {r.mitigating_factors?.length>0
+                  ?<Blist items={r.mitigating_factors} col={C.ok}/>
+                  :<div style={{fontSize:13,color:C.ok}}>{r.contract_renewed&&!ni(r.contract_renewed)?r.contract_renewed:r.ownership_category==="professionally_managed"?"Professionally managed with board oversight":"No specific mitigating factors identified"}</div>
+                }
+              </div>
+            </div>
+
+            {/* ── Press & Activism ── */}
+            <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+              <SH>Press &amp; Activism</SH>
+              {(r.press_signals?.length>0||r.press_controversies)
+                ?<>
+                  {r.press_signals?.filter(s=>s&&s.length>0).map((s,i)=>(
+                    <div key={i} style={{display:"flex",gap:8,marginBottom:6,fontSize:13,color:C.slate,alignItems:"flex-start"}}>
+                      <span style={{color:C.red,flexShrink:0,fontSize:10,marginTop:2}}>▸</span>{s}
+                    </div>
+                  ))}
+                  {r.press_controversies&&!ni(r.press_controversies)&&(
+                    <div style={{fontSize:13,color:C.slate,marginTop:4,lineHeight:1.5}}>{r.press_controversies}</div>
+                  )}
+                  {(!r.press_signals?.length&&!r.press_controversies)&&(
+                    <div style={{fontSize:13,color:C.muted}}>No significant press or activist pressure identified.</div>
+                  )}
+                </>
+                :<div style={{fontSize:13,color:C.muted}}>No significant press or activist pressure identified for this company.</div>
+              }
+              {r.investor_activism&&!ni(r.investor_activism)&&r.investor_activism!=="None identified"&&(
+                <div style={{marginTop:8,padding:"7px 10px",background:C.r10,borderRadius:6,fontSize:12,color:C.redD}}>
+                  <strong>Investor Activism:</strong> {r.investor_activism}
+                </div>
+              )}
+            </div>
+
+            {/* ── Leadership Signals ── */}
             {r.leadership_signals?.length>0&&(
-              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"11px 13px",marginBottom:10}}>
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
                 <SH>Leadership Signals</SH>
                 <Blist items={r.leadership_signals} col={C.red}/>
               </div>
             )}
+
+            {/* ── Succession Signals ── */}
+            {r.succession_signals?.length>0&&(
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+                <SH>Succession Signals</SH>
+                <div style={{display:"flex",flexWrap:"wrap"}}>
+                  {r.succession_signals.map((s,i)=><Pill key={i} text={s} v="a"/>)}
+                </div>
+              </div>
+            )}
+
+            {/* ── Board-Ready Rationale ── */}
             {r.analytical_rationale&&(
-              <div style={{background:`linear-gradient(135deg,${C.redDD},${C.redD})`,borderRadius:10,padding:"13px 16px",position:"relative",overflow:"hidden"}}>
+              <div style={{background:`linear-gradient(135deg,${C.redDD},${C.redD})`,borderRadius:10,padding:"14px 18px",position:"relative",overflow:"hidden"}}>
                 <div style={{position:"absolute",right:-10,top:-10,width:60,height:60,borderRadius:"50%",background:"rgba(255,255,255,0.05)"}}/>
-                <div style={{fontSize:11,fontWeight:800,color:"rgba(255,255,255,0.6)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>Board-Ready Rationale</div>
+                <div style={{fontSize:11,fontWeight:800,color:"rgba(255,255,255,0.6)",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:7}}>Board-Ready Rationale</div>
                 <div style={{fontSize:15,color:C.white,lineHeight:1.7,fontWeight:500}}>{r.analytical_rationale}</div>
               </div>
             )}
