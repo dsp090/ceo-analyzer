@@ -556,12 +556,13 @@ async function runPipeline(company, ticker, log) {
     board_refreshed_2yr:data.board_refreshed_2yr, activist_investors:data.activist_investors,
     press_controversies:joinCompact(press.controversies," | ",30),
     investor_activism:press.investor_activism, mandate_signals:data.mandate_signals,
-    // Risk signals — each from a DIFFERENT data source
-    key_risks:lst(data.press_activism_signals.length>0?data.press_activism_signals:data.financial_signals,4,25),
-    mitigating_factors:lst(finance.signals.length>0?finance.signals:(data.contract_renewed&&!data.contract_renewed.includes("inferable")?[data.contract_renewed]:data.mandate_signals&&!data.mandate_signals.includes("inferable")?[data.mandate_signals]:[]),3,25),
-    succession_signals:lst(industry.signals.length>0?industry.signals:data.industry_signals,4,20),
-    // Agent data — raw signals per agent
-    leadership_signals:data.leadership_signals, financial_signals:data.financial_signals,
+    // Signals — from distinct agent sources
+    key_risks: lst(data.press_activism_signals, 4, 25),
+    mitigating_factors: lst(finance.signals.length>0 ? finance.signals : [], 3, 25),
+    succession_signals: lst(data.leadership_signals, 4, 20),
+    // Raw agent signals
+    leadership_signals: data.leadership_signals,  // research agent — richest contextual signals
+    financial_signals: data.financial_signals,
     press_signals:press.signals, industry_signals:industry.signals,
     finance_view:finance.view, press_view:press.view, industry_view:industry.view,
     finance_concerns:finance.concerns, press_concerns:press.concerns, industry_concerns:industry.concerns,
@@ -695,66 +696,68 @@ function Detail({r}){
 
         {tab==="overview"&&(
           <div>
-            {/* ── Top insight strip ── */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+
+            {/* ── Row 1: Prediction + Confidence + Revenue ── */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8}}>
               <KV label="Prediction" val={PRED_LABEL[r.prediction]||r.prediction} hi={isHigh}/>
               <KV label="Confidence" val={r.confidence} hi={isHigh}/>
               <KV label="Revenue" val={!ni(r.revenue)?r.revenue:""}/>
+            </div>
+
+            {/* ── Row 2: TSR fields ── */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8}}>
               <KV label="TSR 1yr" val={!ni(r.tsr_1yr)?r.tsr_1yr:""}/>
               <KV label="TSR 3yr" val={!ni(r.tsr_3yr)?r.tsr_3yr:""}/>
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
             </div>
 
-            {/* ── CEO Insight bar ── */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+            {/* ── Row 3: CEO facts ── */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
               <KV label="CEO Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
               <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
-              <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)&&["202","expir"].some(k=>String(r.ceo_contract_expiry).toLowerCase().includes(k))}/>
-              <KV label="Activist Investors" val={!ni(r.activist_investors)&&r.activist_investors!=="None identified"?r.activist_investors:""} hi={!ni(r.activist_investors)&&r.activist_investors!=="None identified"&&r.activist_investors!=="none"&&r.activist_investors!=="no"}/>
+              <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)}/>
+              <KV label="Activist Investors" val={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())?r.activist_investors:""} hi={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())}/>
             </div>
 
-            {/* ── Performance bar ── */}
-            {(!ni(r.performance_trajectory)||!ni(r.m_and_a_activity)||!ni(r.regulatory_scrutiny)||r.coo_or_president_appointed)&&(
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
-                <KV label="Performance" val={!ni(r.performance_trajectory)?r.performance_trajectory:""}/>
-                <KV label="M&A Activity" val={!ni(r.m_and_a_activity)?r.m_and_a_activity:""}/>
-                <KV label="Regulatory" val={!ni(r.regulatory_scrutiny)?r.regulatory_scrutiny:""}/>
-                <KV label="COO / Successor" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
-              </div>
-            )}
+            {/* ── Row 4: Context facts ── */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+              <KV label="Performance" val={!ni(r.performance_trajectory)?r.performance_trajectory:""}/>
+              <KV label="M&A Activity" val={!ni(r.m_and_a_activity)?r.m_and_a_activity:""}/>
+              <KV label="Regulatory" val={r.regulatory_scrutiny&&!["none","low"].includes(String(r.regulatory_scrutiny).toLowerCase())?r.regulatory_scrutiny:""}/>
+              <KV label="COO / Heir Apparent" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
+            </div>
 
             {/* ── CEO Transition Alert ── */}
             {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&(
               <div style={{background:C.r20,border:`1px solid rgba(204,0,0,0.35)`,borderRadius:9,padding:"12px 14px",marginBottom:10}}>
                 <SH>CEO Transition Alert</SH>
-                {r.ceo_departure_announced==="yes"&&<div style={{fontSize:13,color:C.redD,marginBottom:4}}>⚠ Departure announced: {r.ceo_name} is leaving.</div>}
+                {r.ceo_departure_announced==="yes"&&(
+                  <div style={{fontSize:13,color:C.redD,marginBottom:4}}>⚠ Departure announced: <strong>{r.ceo_name}</strong> is leaving.</div>
+                )}
                 {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"
-                  ?<div style={{fontSize:13,color:C.redD}}>✓ Successor named: <strong>{r.incoming_ceo_name}</strong>{r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}{r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` (starts ${r.incoming_ceo_start_date})`:""}</div>
+                  ?<div style={{fontSize:13,color:C.redD}}>
+                    ✓ Successor named: <strong>{r.incoming_ceo_name}</strong>
+                    {r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}
+                    {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` · Starts: ${r.incoming_ceo_start_date}`:""}
+                  </div>
                   :r.incoming_ceo_announced==="yes"&&<div style={{fontSize:13,color:C.redD}}>Successor not yet publicly named.</div>
                 }
               </div>
             )}
 
-            {/* ── External Pressure + Governance side by side ── */}
+            {/* ── Main content: two columns ── */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
 
-              {/* Press & Activism — external pressure signals */}
-              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
-                <SH>Press &amp; Activism</SH>
-                {r.press_signals?.filter(s=>s&&s.length>2).length>0
-                  ?<Blist items={r.press_signals.filter(s=>s&&s.length>2)} col={C.red}/>
-                  :r.press_controversies&&!ni(r.press_controversies)
-                    ?<div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.press_controversies}</div>
-                    :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>
+              {/* LEFT: Leadership & Succession Signals */}
+              <div style={{background:C.r10,border:`1px solid rgba(204,0,0,0.15)`,borderRadius:9,padding:"12px 14px"}}>
+                <SH>Leadership &amp; Succession Signals</SH>
+                {r.leadership_signals?.filter(s=>s&&s.length>3).length>0
+                  ?<Blist items={r.leadership_signals.filter(s=>s&&s.length>3)} col={C.red}/>
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific leadership signals identified.</div>
                 }
-                {r.investor_activism&&!ni(r.investor_activism)&&r.investor_activism!=="None identified"&&(
-                  <div style={{marginTop:8,padding:"7px 10px",background:C.r10,borderRadius:6,fontSize:12,color:C.redD}}>
-                    <strong>Activist:</strong> {r.investor_activism}
-                  </div>
-                )}
               </div>
 
-              {/* Governance — board, succession plan, COO */}
+              {/* RIGHT: Governance */}
               <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
                 <SH>Governance &amp; Succession Plan</SH>
                 {[
@@ -762,35 +765,48 @@ function Detail({r}){
                   !ni(r.coo_or_president_appointed)?`COO/President: ${r.coo_or_president_appointed}`:"",
                   !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
                   !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
-                  !ni(r.mandate_signals)?`Mandate: ${r.mandate_signals}`:"",
+                  !ni(r.mandate_signals)?r.mandate_signals:"",
                 ].filter(Boolean).length>0
                   ?<Blist items={[
-                      !ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",
-                      !ni(r.coo_or_president_appointed)?`COO/President: ${r.coo_or_president_appointed}`:"",
-                      !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
-                      !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
-                      !ni(r.mandate_signals)?`Mandate: ${r.mandate_signals}`:"",
-                    ].filter(Boolean)} col={C.blue||"#003399"}/>
+                    !ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",
+                    !ni(r.coo_or_president_appointed)?`COO/President: ${r.coo_or_president_appointed}`:"",
+                    !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
+                    !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
+                    !ni(r.mandate_signals)?r.mandate_signals:"",
+                  ].filter(Boolean)} col={"#003399"}/>
                   :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific governance signals available.</div>
                 }
               </div>
             </div>
 
-            {/* ── Financial Performance ── */}
-            {r.financial_signals?.filter(s=>s&&s.length>2).length>0&&(
-              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
-                <SH>Financial Performance Signals</SH>
-                <Blist items={r.financial_signals.filter(s=>s&&s.length>2)} col={C.warn}/>
-              </div>
-            )}
+            {/* ── Second row: Press + Financial ── */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
 
-            {/* ── Industry Context ── */}
-            {r.industry_signals?.filter(s=>s&&s.length>2).length>0&&(
-              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
-                <SH>Industry &amp; Sector Context</SH>
-                <Blist items={r.industry_signals.filter(s=>s&&s.length>2)} col={"#003399"}/>
+              {/* Press & Activism */}
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
+                <SH>Press &amp; Activism</SH>
+                {r.press_signals?.filter(s=>s&&s.length>3).length>0
+                  ?<Blist items={r.press_signals.filter(s=>s&&s.length>3)} col={C.red}/>
+                  :r.press_controversies&&!ni(r.press_controversies)
+                    ?<div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.press_controversies}</div>
+                    :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>
+                }
+                {r.investor_activism&&!ni(r.investor_activism)&&!["none identified","not clearly"].some(x=>r.investor_activism.toLowerCase().includes(x))&&(
+                  <div style={{marginTop:8,padding:"7px 10px",background:C.r10,borderRadius:6,fontSize:12,color:C.redD}}>
+                    <strong>Activist detail:</strong> {r.investor_activism}
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Financial & Industry */}
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
+                <SH>Financial &amp; Industry Signals</SH>
+                {[...(r.financial_signals||[]),...(r.industry_signals||[])].filter(s=>s&&s.length>3).length>0
+                  ?<Blist items={[...(r.financial_signals||[]),...(r.industry_signals||[])].filter(s=>s&&s.length>3).slice(0,5)} col={C.warn}/>
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific financial or industry signals identified.</div>
+                }
+              </div>
+            </div>
 
             {/* ── Board-Ready Rationale ── */}
             {r.analytical_rationale&&(
@@ -802,7 +818,6 @@ function Detail({r}){
             )}
           </div>
         )}
-
         {tab==="agents"&&(
           <div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
