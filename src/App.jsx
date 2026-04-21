@@ -556,11 +556,11 @@ async function runPipeline(company, ticker, log) {
     board_refreshed_2yr:data.board_refreshed_2yr, activist_investors:data.activist_investors,
     press_controversies:joinCompact(press.controversies," | ",30),
     investor_activism:press.investor_activism, mandate_signals:data.mandate_signals,
-    // Risk signals
-    key_risks:lst(data.press_activism_signals,4,25),
-    mitigating_factors:lst(finance.signals,3,25),
-    succession_signals:lst(data.leadership_signals,4,20),
-    // Agent data
+    // Risk signals — each from a DIFFERENT data source
+    key_risks:lst(data.press_activism_signals.length>0?data.press_activism_signals:data.financial_signals,4,25),
+    mitigating_factors:lst(finance.signals.length>0?finance.signals:(data.contract_renewed&&!data.contract_renewed.includes("inferable")?[data.contract_renewed]:data.mandate_signals&&!data.mandate_signals.includes("inferable")?[data.mandate_signals]:[]),3,25),
+    succession_signals:lst(industry.signals.length>0?industry.signals:data.industry_signals,4,20),
+    // Agent data — raw signals per agent
     leadership_signals:data.leadership_signals, financial_signals:data.financial_signals,
     press_signals:press.signals, industry_signals:industry.signals,
     finance_view:finance.view, press_view:press.view, industry_view:industry.view,
@@ -735,65 +735,60 @@ function Detail({r}){
               </div>
             )}
 
-            {/* ── Key Risks + Mitigating side by side ── */}
+            {/* ── External Pressure + Governance side by side ── */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-              <div style={{background:C.r10,border:`1px solid rgba(204,0,0,0.15)`,borderRadius:9,padding:"12px 14px"}}>
-                <SH>Key Risks</SH>
-                {r.key_risks?.length>0
-                  ?<Blist items={r.key_risks} col={C.red}/>
-                  :<Blist items={r.leadership_signals?.length>0?r.leadership_signals:["No specific risk signals identified"]} col={C.red}/>
+
+              {/* Press & Activism — external pressure signals */}
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
+                <SH>Press &amp; Activism</SH>
+                {r.press_signals?.filter(s=>s&&s.length>2).length>0
+                  ?<Blist items={r.press_signals.filter(s=>s&&s.length>2)} col={C.red}/>
+                  :r.press_controversies&&!ni(r.press_controversies)
+                    ?<div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.press_controversies}</div>
+                    :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>
                 }
+                {r.investor_activism&&!ni(r.investor_activism)&&r.investor_activism!=="None identified"&&(
+                  <div style={{marginTop:8,padding:"7px 10px",background:C.r10,borderRadius:6,fontSize:12,color:C.redD}}>
+                    <strong>Activist:</strong> {r.investor_activism}
+                  </div>
+                )}
               </div>
-              <div style={{background:C.okBg,border:`1px solid rgba(13,154,94,0.2)`,borderRadius:9,padding:"12px 14px"}}>
-                <SH>Mitigating Factors</SH>
-                {r.mitigating_factors?.length>0
-                  ?<Blist items={r.mitigating_factors} col={C.ok}/>
-                  :<div style={{fontSize:13,color:C.ok}}>{r.contract_renewed&&!ni(r.contract_renewed)?r.contract_renewed:r.ownership_category==="professionally_managed"?"Professionally managed with board oversight":"No specific mitigating factors identified"}</div>
+
+              {/* Governance — board, succession plan, COO */}
+              <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px"}}>
+                <SH>Governance &amp; Succession Plan</SH>
+                {[
+                  !ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",
+                  !ni(r.coo_or_president_appointed)?`COO/President: ${r.coo_or_president_appointed}`:"",
+                  !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
+                  !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
+                  !ni(r.mandate_signals)?`Mandate: ${r.mandate_signals}`:"",
+                ].filter(Boolean).length>0
+                  ?<Blist items={[
+                      !ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",
+                      !ni(r.coo_or_president_appointed)?`COO/President: ${r.coo_or_president_appointed}`:"",
+                      !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
+                      !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
+                      !ni(r.mandate_signals)?`Mandate: ${r.mandate_signals}`:"",
+                    ].filter(Boolean)} col={C.blue||"#003399"}/>
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific governance signals available.</div>
                 }
               </div>
             </div>
 
-            {/* ── Press & Activism ── */}
-            <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
-              <SH>Press &amp; Activism</SH>
-              {(r.press_signals?.length>0||r.press_controversies)
-                ?<>
-                  {r.press_signals?.filter(s=>s&&s.length>0).map((s,i)=>(
-                    <div key={i} style={{display:"flex",gap:8,marginBottom:6,fontSize:13,color:C.slate,alignItems:"flex-start"}}>
-                      <span style={{color:C.red,flexShrink:0,fontSize:10,marginTop:2}}>▸</span>{s}
-                    </div>
-                  ))}
-                  {r.press_controversies&&!ni(r.press_controversies)&&(
-                    <div style={{fontSize:13,color:C.slate,marginTop:4,lineHeight:1.5}}>{r.press_controversies}</div>
-                  )}
-                  {(!r.press_signals?.length&&!r.press_controversies)&&(
-                    <div style={{fontSize:13,color:C.muted}}>No significant press or activist pressure identified.</div>
-                  )}
-                </>
-                :<div style={{fontSize:13,color:C.muted}}>No significant press or activist pressure identified for this company.</div>
-              }
-              {r.investor_activism&&!ni(r.investor_activism)&&r.investor_activism!=="None identified"&&(
-                <div style={{marginTop:8,padding:"7px 10px",background:C.r10,borderRadius:6,fontSize:12,color:C.redD}}>
-                  <strong>Investor Activism:</strong> {r.investor_activism}
-                </div>
-              )}
-            </div>
-
-            {/* ── Leadership Signals ── */}
-            {r.leadership_signals?.length>0&&(
+            {/* ── Financial Performance ── */}
+            {r.financial_signals?.filter(s=>s&&s.length>2).length>0&&(
               <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
-                <SH>Leadership Signals</SH>
-                <Blist items={r.leadership_signals} col={C.red}/>
+                <SH>Financial Performance Signals</SH>
+                <Blist items={r.financial_signals.filter(s=>s&&s.length>2)} col={C.warn}/>
               </div>
             )}
 
-            {/* ── Succession Signals ── */}
-            {r.succession_signals?.length>0&&(
+            {/* ── Industry Context ── */}
+            {r.industry_signals?.filter(s=>s&&s.length>2).length>0&&(
               <div style={{background:C.white,border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
-                <SH>Succession Signals</SH>
-                <div style={{display:"flex",flexWrap:"wrap"}}>
-                  {r.succession_signals.map((s,i)=><Pill key={i} text={s} v="a"/>)}
-                </div>
+                <SH>Industry &amp; Sector Context</SH>
+                <Blist items={r.industry_signals.filter(s=>s&&s.length>2)} col={"#003399"}/>
               </div>
             )}
 
