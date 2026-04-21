@@ -82,125 +82,164 @@ async function callLLM(sys, usr, webSearch=false) {
   return d.choices?.[0]?.message?.content?.trim()||"";
 }
 
-// ── Agent 1: CEO News (web search + fallback) ────────────────────────────────
+// ── Agent 1: Web Search — fetch latest CEO news ─────────────────────────────
 async function fetchCEONews(company) {
-  const today = new Date().toDateString(); // e.g. "Mon Apr 21 2026"
-  const yr = new Date().getFullYear();
+  const today = new Date().toDateString();
+  const yr    = new Date().getFullYear();
 
-  const sys = `You are a corporate news analyst. Today is ${today}. Use web search to find the LATEST news about CEO changes. Your training data may be outdated — always prefer fresh search results.`;
+  const sys = `You are a corporate intelligence analyst. Today is ${today}.
+Your job: find the most current CEO information for a company.
+If web search is available, use it. Otherwise use your most recent training knowledge.
+Always prefer the MOST RECENT data over older historical facts.`;
 
-  const prompt = `Search the web right now for CEO news about "${company}". Today is ${today}.
+  const prompt = `Find the latest CEO information for: "${company}"
+Today's date: ${today}
 
-Answer ALL of these with FULL NAMES and EXACT DATES:
-1. CURRENT CEO: Who is the CEO of "${company}" as of TODAY ${today}? Full name.
-2. DEPARTURE: Has the current or previous CEO announced stepping down, retiring, or being replaced? If yes — their full name and departure date.
-3. INCOMING CEO: Has a NAMED SUCCESSOR been announced? If yes — their FULL NAME, background, and confirmed start date. This is critical — do not omit the new CEO name.
-4. RECENT CHANGE: Has a new CEO already taken over in ${yr} or late ${yr-1}? If yes — new CEO full name and start date.
+Answer each question precisely:
 
-Search queries:
-- "${company} new CEO ${yr}"
-- "${company} CEO successor named"
-- "${company} CEO replacement announced"
-- "${company} CEO steps down ${yr}"
-- "${company} appoints new chief executive"
-- "${company} CEO change ${yr}"
+Q1. CURRENT CEO — Who is the CEO right now? (Full first + last name, start date)
+Q2. RECENT CHANGE — Has the CEO changed in ${yr-1} or ${yr}? (Yes/No. If yes: old CEO name, new CEO name, date of change)
+Q3. DEPARTURE ANNOUNCED — Has any CEO formally announced they are leaving/retiring/stepping down? (Yes/No. If yes: name + date)
+Q4. SUCCESSOR NAMED — Has a specific named person been announced as the next CEO? (Yes/No. If yes: their FULL NAME, their current/previous role, expected start date)
 
-CRITICAL INSTRUCTIONS:
-- If a new CEO has been NAMED, you MUST include their full name.
-- If the old CEO stepped down and a replacement was announced, give BOTH names.
-- Do not say "not announced" if a name is available in search results.
-- State full first and last name for both departing and incoming CEO.`;
+Rules:
+- Always give FULL names (first + last)
+- If a CEO change happened recently, report the NEW CEO as current
+- If a successor has been named in any press release or announcement, report their full name in Q4
+- Be specific with dates (month + year if possible)`;
 
-  // Try with web search
   try {
     const result = await callLLM(sys, prompt, true);
-    if(result && result.length > 30) return result;
-    throw new Error("Empty result");
-  } catch(e1) {
-    // Fallback: model knowledge without web search
+    if (result && result.length > 40) return result;
+    throw new Error("empty");
+  } catch {
     try {
-      const fallbackPrompt = `Today is ${today}. Based on your most recent knowledge, answer for "${company}":
-1. Who is the current CEO and when did they start?
-2. Has there been any CEO change, announcement, or succession news in 2024 or 2025?
-3. Any announced departures or incoming successors?
-Be specific with names and dates. If a change happened very recently (${yr}), prioritise that over older data.`;
-      return await callLLM(
-        `You are a corporate analyst. Today is ${today}. Use your most up-to-date knowledge about CEO changes.`,
-        fallbackPrompt,
-        false
-      );
-    } catch { return `Could not retrieve CEO news for ${company}.`; }
+      return await callLLM(sys, prompt, false);
+    } catch {
+      return `No recent CEO news found for ${company}.`;
+    }
   }
 }
-// ── Agent 2: Research ─────────────────────────────────────────────────────────
+
+// ── Agent 2: Research — build full CEO profile from news + training data ──────
 async function agentResearch(company, ticker, webCtx) {
-  const fallback = {sector:"",ceo_name:"",ceo_age:"not publicly disclosed",ceo_start_date:"",ceo_tenure_years:"",founder_status:"",ownership_category:"unclear",ceo_departure_announced:"no",incoming_ceo_announced:"no",incoming_ceo_name:"N/A",incoming_ceo_background:"N/A",incoming_ceo_start_date:"N/A",leadership_signals:[],financial_signals:[],press_activism_signals:[],industry_signals:[],revenue:"not clearly inferable",tsr_1yr:"not clearly inferable",tsr_3yr:"not clearly inferable",tsr_vs_peers:"not clearly inferable",investor_activism:"not clearly inferable",ceo_contract_expiry:"not clearly inferable",contract_renewed:"not clearly inferable",succession_plan_disclosed:"not clearly inferable",coo_or_president_appointed:"not clearly inferable",board_refreshed_2yr:"not clearly inferable",activist_investors:"not clearly inferable",mandate_signals:"not clearly inferable"};
+  const today = new Date().toDateString();
+  const fallback = {
+    sector:"", ceo_name:"", ceo_age:"not publicly disclosed",
+    ceo_start_date:"", ceo_tenure_years:"", founder_status:"",
+    ownership_category:"unclear",
+    ceo_departure_announced:"no", incoming_ceo_announced:"no",
+    incoming_ceo_name:"N/A", incoming_ceo_background:"N/A", incoming_ceo_start_date:"N/A",
+    leadership_signals:[], financial_signals:[], press_activism_signals:[], industry_signals:[],
+    revenue:"not clearly inferable", tsr_1yr:"not clearly inferable",
+    tsr_3yr:"not clearly inferable", tsr_vs_peers:"not clearly inferable",
+    investor_activism:"not clearly inferable", ceo_contract_expiry:"not clearly inferable",
+    contract_renewed:"not clearly inferable", succession_plan_disclosed:"not clearly inferable",
+    coo_or_president_appointed:"not clearly inferable", board_refreshed_2yr:"not clearly inferable",
+    activist_investors:"not clearly inferable", mandate_signals:"not clearly inferable"
+  };
+
   const raw = await callLLM(
-    `You are an institutional-grade CEO succession research analyst. Today is ${new Date().toDateString()}.
-Use BOTH your training knowledge AND the CEO news context below.
-CRITICAL: If the CEO news context mentions a RECENT CEO change (2023/2024/2025), you MUST use that — override your training data.
-Return JSON only. No markdown.`,
+    `You are an institutional CEO succession research analyst. Today is ${today}.
+PRIORITY: The CEO News Context below contains the most recent data — always prefer it over your training knowledge for current CEO name, departure, and succession facts.
+Return ONLY valid JSON. No markdown, no extra text.`,
+
     `Company: ${company}
 Ticker: ${ticker||"N/A"}
+Today: ${today}
 
-CEO NEWS CONTEXT (prioritise for recent events):
+━━━ CEO NEWS CONTEXT (most recent — treat as ground truth) ━━━
 ${webCtx}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-EXTRACTION INSTRUCTIONS — read the CEO news context above carefully:
+MAPPING RULES — extract from the news context above:
 
-STEP 1 — DEPARTURE CHECK:
-- Does the context mention the current/previous CEO stepping down, retiring, or being replaced?
-- If YES → set ceo_departure_announced="yes"
+► ceo_departure_announced
+  Set "yes" if the news mentions: CEO stepping down / retiring / leaving / being replaced / departure announced
+  Set "no" otherwise
 
-STEP 2 — INCOMING CEO CHECK (CRITICAL):
-- Does the context name a SPECIFIC PERSON as the new/incoming/replacement CEO?
-- If YES → set incoming_ceo_announced="yes", put their FULL NAME in incoming_ceo_name, their background in incoming_ceo_background, their start date in incoming_ceo_start_date
-- If the new CEO has ALREADY started → also update ceo_name to the NEW CEO and ceo_start_date to their start date
+► incoming_ceo_announced + incoming_ceo_name
+  Set "yes" if ANY specific person is named as the next/incoming/replacement CEO
+  Put their FULL NAME in incoming_ceo_name (e.g. "John Smith")
+  Put their background in incoming_ceo_background (e.g. "COO since 2020", "External hire from Goldman Sachs")
+  Put their start date in incoming_ceo_start_date (e.g. "Q2 2025", "immediately", "January 2026")
+  ⚠ NEVER leave incoming_ceo_name as "N/A" if a person's name appears in the news context above
 
-STEP 3 — NAME EXTRACTION RULES:
-- incoming_ceo_name: must be a real full name like "John Smith" — NEVER "N/A" if a name was mentioned in the context
-- If the context says "X will replace Y" or "X named as new CEO" or "X appointed CEO" → X goes in incoming_ceo_name
-- incoming_ceo_background: their previous role e.g. "Former COO since 2019" or "External hire from Goldman Sachs"
-- incoming_ceo_start_date: specific date or "Q2 2025" or "immediately" — not "N/A" if mentioned
+► ceo_name
+  If the new CEO has ALREADY started → use the NEW CEO's name
+  If still in transition → keep the current/outgoing CEO's name
 
-STEP 4 — TENURE:
-- For ceo_tenure_years: calculate from ceo_start_date to today. A new CEO appointed in 2024 will have <2 years tenure.
+► ceo_start_date
+  Use YYYY-MM format where possible. If new CEO just started, use their start date.
 
-Return this JSON:
-{"sector":"","ceo_name":"","ceo_age":"","ceo_start_date":"YYYY-MM format preferred","ceo_tenure_years":"","founder_status":"","ownership_category":"professionally_managed","ceo_departure_announced":"no","incoming_ceo_announced":"no","incoming_ceo_name":"N/A","incoming_ceo_background":"N/A","incoming_ceo_start_date":"N/A","leadership_signals":[],"financial_signals":[],"press_activism_signals":[],"industry_signals":[],"revenue":"","tsr_1yr":"","tsr_3yr":"","tsr_vs_peers":"","investor_activism":"","ceo_contract_expiry":"","contract_renewed":"","succession_plan_disclosed":"","coo_or_president_appointed":"","board_refreshed_2yr":"","activist_investors":"","mandate_signals":""}
+Return this exact JSON structure:
+{
+  "sector": "",
+  "ceo_name": "",
+  "ceo_age": "",
+  "ceo_start_date": "",
+  "ceo_tenure_years": "",
+  "founder_status": "",
+  "ownership_category": "professionally_managed",
+  "ceo_departure_announced": "no",
+  "incoming_ceo_announced": "no",
+  "incoming_ceo_name": "N/A",
+  "incoming_ceo_background": "N/A",
+  "incoming_ceo_start_date": "N/A",
+  "leadership_signals": [],
+  "financial_signals": [],
+  "press_activism_signals": [],
+  "industry_signals": [],
+  "revenue": "",
+  "tsr_1yr": "",
+  "tsr_3yr": "",
+  "tsr_vs_peers": "",
+  "investor_activism": "",
+  "ceo_contract_expiry": "",
+  "contract_renewed": "",
+  "succession_plan_disclosed": "",
+  "coo_or_president_appointed": "",
+  "board_refreshed_2yr": "",
+  "activist_investors": "",
+  "mandate_signals": ""
+}
 
-Field rules:
-- ownership_category: founder_ceo|family_ceo|founder_family_control_non_ceo|government_controlled|state_owned_enterprise|professionally_managed|unclear
-- incoming_ceo_name: FULL NAME of announced successor — e.g. "John Smith". Use "N/A" ONLY if truly no name mentioned anywhere in the context above.
-- incoming_ceo_background: their previous role/company — e.g. "COO at Apple since 2019" or "External hire from Microsoft". Use "N/A" only if unknown.
-- incoming_ceo_start_date: specific date or quarter — e.g. "2025-06-01", "Q3 2025", "immediately". Use "N/A" only if truly not mentioned.
-- revenue: USD, format $XXbn or $XXXm
-- tsr_1yr/tsr_3yr: percentage e.g. +12% or -8%
-- ceo_departure_announced/incoming_ceo_announced: "yes" or "no" only
-- lists: max 4 items, 20 words each`
+Field constraints:
+- ownership_category: founder_ceo | family_ceo | founder_family_control_non_ceo | government_controlled | state_owned_enterprise | professionally_managed | unclear
+- ceo_departure_announced / incoming_ceo_announced: "yes" or "no" only
+- revenue: USD only, format $XXbn or $XXXm
+- tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%"
+- All list fields: max 4 items, 20 words each`
   );
-  const d = parseJSON(raw, fallback);
-  d.sector=cl(d.sector,8); d.ceo_name=cl(d.ceo_name,8); d.ceo_start_date=cl(d.ceo_start_date,8);
-  d.ownership_category=cl(d.ownership_category||"unclear",4);
-  d.leadership_signals=lst(d.leadership_signals,4,20); d.financial_signals=lst(d.financial_signals,4,20);
-  d.press_activism_signals=lst(d.press_activism_signals,4,20); d.industry_signals=lst(d.industry_signals,4,20);
-  for(const f of ["revenue","tsr_1yr","tsr_3yr","tsr_vs_peers","investor_activism","ceo_contract_expiry","contract_renewed","mandate_signals"])
-    d[f]=cl(d[f]||"not clearly inferable",16)||"not clearly inferable";
 
-  // Clamp incoming CEO fields
+  const d = parseJSON(raw, fallback);
+
+  // Clean and clamp all fields
+  d.sector             = cl(d.sector, 8);
+  d.ceo_name           = cl(d.ceo_name, 8);
+  d.ceo_start_date     = cl(d.ceo_start_date, 8);
+  d.ownership_category = cl(d.ownership_category||"unclear", 4);
   d.incoming_ceo_name       = cl(d.incoming_ceo_name||"N/A", 8);
   d.incoming_ceo_background = cl(d.incoming_ceo_background||"N/A", 15);
   d.incoming_ceo_start_date = cl(d.incoming_ceo_start_date||"N/A", 8);
 
-  // If incoming CEO was announced but name is still N/A, try to extract from webCtx directly
-  if(d.incoming_ceo_announced==="yes" && (!d.incoming_ceo_name || d.incoming_ceo_name==="N/A")) {
-    // Flag it so UI shows "Name not captured — check rationale"
-    d.incoming_ceo_name = "Named (see rationale)";
-  }
+  d.leadership_signals     = lst(d.leadership_signals, 4, 20);
+  d.financial_signals      = lst(d.financial_signals, 4, 20);
+  d.press_activism_signals = lst(d.press_activism_signals, 4, 20);
+  d.industry_signals       = lst(d.industry_signals, 4, 20);
 
-  // Always recompute tenure from start date (overrides LLM guess)
-  const computed=calcTenure(d.ceo_start_date);
-  if(computed) d.ceo_tenure_years=computed;
+  for (const f of ["revenue","tsr_1yr","tsr_3yr","tsr_vs_peers","investor_activism",
+                   "ceo_contract_expiry","contract_renewed","mandate_signals"])
+    d[f] = cl(d[f]||"not clearly inferable", 16) || "not clearly inferable";
+
+  // Fallback: if incoming announced but name still blank
+  if (d.incoming_ceo_announced === "yes" && (!d.incoming_ceo_name || d.incoming_ceo_name === "N/A"))
+    d.incoming_ceo_name = "Successor named — see rationale";
+
+  // Always recompute tenure from start date
+  const computed = calcTenure(d.ceo_start_date);
+  if (computed) d.ceo_tenure_years = computed;
+
   return d;
 }
 // ── Agent 3: Finance ──────────────────────────────────────────────────────────
@@ -214,105 +253,241 @@ async function agentFinance(data) {
   return r;
 }
 
-// ── Agent 4: Press ────────────────────────────────────────────────────────────
+// ── Agent 4: Press & Activism ────────────────────────────────────────────────
 async function agentPress(data) {
-  const fallback={view:"no_clear_influence",signals:[],concerns:[],controversies:(data.press_activism_signals||[]).slice(0,3),investor_activism:data.investor_activism||"not clearly inferable"};
-  const raw=await callLLM("You are a governance and investor activism expert. Assess external pressure signals for CEO succession. Return JSON only.",`Data:\n${JSON.stringify(data)}\n\nReturn:\n{"view":"no_clear_influence","signals":[],"concerns":[],"controversies":[],"investor_activism":""}\n\nview=high_influence|medium_influence|weak_influence|no_clear_influence. lists max 3 items 20 words.`);
-  const r=parseJSON(raw,fallback);
-  r.view=cl(r.view||"no_clear_influence",3); r.signals=lst(r.signals,3,18); r.concerns=lst(r.concerns,2,18);
-  r.controversies=lst(r.controversies,3,20); r.investor_activism=cl(r.investor_activism||"not clearly inferable",12)||"not clearly inferable";
+  const fallback = {
+    view:"no_clear_influence", signals:[], concerns:[],
+    controversies:(data.press_activism_signals||[]).slice(0,3),
+    investor_activism:data.investor_activism||"not clearly inferable"
+  };
+
+  const raw = await callLLM(
+    `You are a governance and investor relations expert specialising in CEO succession risk.
+Analyse the specific data provided and identify REAL, NAMED signals — not generic observations.
+Return ONLY valid JSON.`,
+
+    `━━━ COMPANY DATA ━━━
+Company: ${data.company||""}  |  Sector: ${data.sector}  |  CEO: ${data.ceo_name}
+CEO tenure: ${data.ceo_tenure_years} years  |  Ownership: ${data.ownership_category}
+TSR 1yr: ${data.tsr_1yr}  |  TSR vs peers: ${data.tsr_vs_peers}
+Activist investors: ${data.activist_investors}
+Press/activism signals from research: ${JSON.stringify(data.press_activism_signals)}
+Investor activism detail: ${data.investor_activism}
+Mandate signals: ${data.mandate_signals}
+Contract expiry: ${data.ceo_contract_expiry}  |  Renewed: ${data.contract_renewed}
+
+━━━ TASK ━━━
+Based on the data above, assess external pressure on CEO succession.
+
+Return this JSON:
+{
+  "view": "",
+  "signals": [],
+  "concerns": [],
+  "controversies": [],
+  "investor_activism": ""
+}
+
+━━━ RULES ━━━
+view: high_influence | medium_influence | weak_influence | no_clear_influence
+  • high_influence: named activist campaign, public shareholder letter demanding CEO change, major scandal/investigation, formal vote of no-confidence
+  • medium_influence: TSR underperformance vs peers, compensation controversy, governance criticism from proxy advisors
+  • weak_influence: minor governance concerns, one-off press criticism
+  • no_clear_influence: no notable external pressure
+
+signals: up to 3 items — SPECIFIC facts only (e.g. "Elliott Management disclosed 5% stake in 2024", "ISS recommended against CEO pay package")
+  DO NOT write generic phrases like "governance scrutiny typical for mega-cap" or "no credible report"
+  If no real signals exist, return an empty array []
+
+concerns: up to 2 items — actual identified risks with specifics
+controversies: up to 3 items — named events, lawsuits, activist letters, regulatory probes
+investor_activism: summarise any named activist investors and their stated position, or "None identified"
+
+⚠ Quality rule: Every item must reference a SPECIFIC event, person, or named entity. Generic observations are not allowed.`
+  );
+
+  const r = parseJSON(raw, fallback);
+  r.view             = cl(r.view||"no_clear_influence", 3);
+  r.signals          = lst(r.signals, 3, 20);
+  r.concerns         = lst(r.concerns, 2, 20);
+  r.controversies    = lst(r.controversies, 3, 20);
+  r.investor_activism = cl(r.investor_activism||"not clearly inferable", 15)||"not clearly inferable";
+
+  // Filter out generic boilerplate phrases
+  const genericPhrases = ["typical for","no credible","no major","not identified","no report","governance scrutiny"];
+  const isGeneric = s => genericPhrases.some(p => s.toLowerCase().includes(p));
+  r.signals       = r.signals.filter(s => !isGeneric(s));
+  r.concerns      = r.concerns.filter(s => !isGeneric(s));
+  r.controversies = r.controversies.filter(s => !isGeneric(s));
+
   return r;
 }
 
 // ── Agent 5: Industry ─────────────────────────────────────────────────────────
 async function agentIndustry(data) {
-  const fallback={view:"no_clear_influence",signals:data.industry_signals||[],concerns:[]};
-  const raw=await callLLM("You are a sector strategy expert. Assess industry dynamics for CEO succession. Return JSON only.",`Data:\n${JSON.stringify(data)}\n\nReturn:\n{"view":"no_clear_influence","signals":[],"concerns":[]}\n\nview=high_influence|medium_influence|weak_influence|no_clear_influence. lists max 3 items 20 words.`);
-  const r=parseJSON(raw,fallback);
-  r.view=cl(r.view||"no_clear_influence",3); r.signals=lst(r.signals,3,18); r.concerns=lst(r.concerns,2,18);
+  const fallback = { view:"no_clear_influence", signals:data.industry_signals||[], concerns:[] };
+
+  const raw = await callLLM(
+    `You are a sector strategy expert. Assess how industry dynamics affect CEO succession risk. Return ONLY valid JSON.`,
+    `━━━ COMPANY DATA ━━━
+Company: ${data.company||""}  |  Sector: ${data.sector}
+CEO tenure: ${data.ceo_tenure_years} years  |  Performance: ${data.performance_trajectory||"unknown"}
+TSR vs peers: ${data.tsr_vs_peers}  |  M&A activity: ${data.m_and_a_activity||"unknown"}
+Industry signals from research: ${JSON.stringify(data.industry_signals)}
+
+Return:
+{"view":"","signals":[],"concerns":[]}
+
+view: high_influence | medium_influence | weak_influence | no_clear_influence
+signals: up to 3 SPECIFIC industry dynamics affecting this CEO's tenure (e.g. "AI disruption forcing strategic pivot", "Regulatory pressure on advertising model")
+concerns: up to 2 specific risks
+⚠ Be specific to this company and sector — no generic observations.`
+  );
+
+  const r = parseJSON(raw, fallback);
+  r.view     = cl(r.view||"no_clear_influence", 3);
+  r.signals  = lst(r.signals, 3, 20);
+  r.concerns = lst(r.concerns, 2, 20);
   return r;
 }
 
-// ── Agent 6: Prediction ───────────────────────────────────────────────────────
+// ── Agent 6: Prediction — final board-ready risk verdict ─────────────────────
 async function agentPrediction(data, finance, press, industry) {
-  const fallback={prediction:"low_likelihood",confidence:"low",analytical_rationale:""};
+  const fallback = { prediction:"low_likelihood", confidence:"low", analytical_rationale:"" };
 
-  // ── CODE-LEVEL OVERRIDES (no LLM needed for clear cases) ──────────────────
-
-  // FAMILY/FOUNDER RULE: If CEO is family member or founder → ALWAYS low_likelihood
-  // regardless of age, tenure, or any other factor. Family succession is planned
-  // and controlled — external departure risk is minimal.
+  // ── HARD CODE OVERRIDES — no LLM needed, answer is deterministic ─────────
   const isFamily = ["founder_ceo","family_ceo","founder_family_control_non_ceo"].includes(data.ownership_category);
-  if(isFamily) {
-    // Only exception: departure already formally announced
-    if(data.ceo_departure_announced!=="yes" && data.incoming_ceo_announced!=="yes") {
-      return {
-        prediction:"low_likelihood", confidence:"high",
-        analytical_rationale:`${data.ceo_name} is a ${OWN_LABEL[data.ownership_category]||"family/founder"} CEO. Family and founder-controlled companies have planned, controlled succession processes. External departure pressure is minimal. No departure has been announced. Succession risk is low regardless of tenure or age.`
-      };
-    }
+
+  // Rule 1: Family/founder CEO with no announced departure → always Low
+  if (isFamily && data.ceo_departure_announced !== "yes" && data.incoming_ceo_announced !== "yes") {
+    return {
+      prediction: "low_likelihood",
+      confidence: "high",
+      analytical_rationale: `${data.ceo_name} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-led businesses have internally managed, planned succession processes with minimal external departure pressure. No departure has been announced. Succession risk is structurally low regardless of tenure or age.`
+    };
   }
 
-  // If departure announced AND successor known → always transition_underway
-  if(data.ceo_departure_announced==="yes" && data.incoming_ceo_announced==="yes") {
-    return {prediction:"transition_underway", confidence:"high",
-      analytical_rationale:`${data.ceo_name} has formally announced departure from ${data.sector||"the company"}. Named successor: ${data.incoming_ceo_name}${data.incoming_ceo_background&&data.incoming_ceo_background!=="N/A"?" ("+data.incoming_ceo_background+")":""}.${data.incoming_ceo_start_date&&data.incoming_ceo_start_date!=="N/A"?" Expected start: "+data.incoming_ceo_start_date+".":""} The CEO transition is confirmed and underway. Investors should monitor leadership continuity and strategic direction under the incoming executive.`};
+  // Rule 2: Departure announced + named successor confirmed → Transition Underway
+  if (data.ceo_departure_announced === "yes" && data.incoming_ceo_announced === "yes") {
+    const succ = data.incoming_ceo_name && data.incoming_ceo_name !== "N/A" ? data.incoming_ceo_name : "a named successor";
+    const bg   = data.incoming_ceo_background && data.incoming_ceo_background !== "N/A" ? ` (${data.incoming_ceo_background})` : "";
+    const dt   = data.incoming_ceo_start_date && data.incoming_ceo_start_date !== "N/A" ? ` Expected start: ${data.incoming_ceo_start_date}.` : "";
+    return {
+      prediction: "transition_underway",
+      confidence: "high",
+      analytical_rationale: `${data.ceo_name} has formally announced departure. Named successor: ${succ}${bg}.${dt} The CEO transition is confirmed and actively underway. Investors should monitor strategic continuity under incoming leadership.`
+    };
   }
-  // If departure announced but no successor yet → high_likelihood
-  if(data.ceo_departure_announced==="yes") {
-    return {prediction:"high_likelihood", confidence:"high",
-      analytical_rationale:`${data.ceo_name} has formally announced departure from ${data.sector||"the company"}. No successor has been named yet. A CEO change is highly likely in the near term.`};
+
+  // Rule 3: Departure announced but no named successor yet → High Likelihood
+  if (data.ceo_departure_announced === "yes") {
+    return {
+      prediction: "high_likelihood",
+      confidence: "high",
+      analytical_rationale: `${data.ceo_name} has formally announced departure from ${data.sector||"the company"}. A successor has not yet been publicly named. A CEO change is confirmed — timing and successor identity remain uncertain. This represents elevated transition risk for investors.`
+    };
   }
-  // If incoming CEO announced → transition_underway
-  if(data.incoming_ceo_announced==="yes") {
-    return {prediction:"transition_underway", confidence:"high",
-      analytical_rationale:`A named successor has been publicly announced: ${data.incoming_ceo_name}${data.incoming_ceo_background&&data.incoming_ceo_background!=="N/A"?" ("+data.incoming_ceo_background+")":""}.${data.incoming_ceo_start_date&&data.incoming_ceo_start_date!=="N/A"?" Confirmed start: "+data.incoming_ceo_start_date+".":""} The CEO transition is confirmed and actively underway. Board has completed succession planning.`};
+
+  // Rule 4: Incoming CEO already announced (even without formal departure) → Transition Underway
+  if (data.incoming_ceo_announced === "yes") {
+    const succ = data.incoming_ceo_name && data.incoming_ceo_name !== "N/A" ? data.incoming_ceo_name : "a named successor";
+    const bg   = data.incoming_ceo_background && data.incoming_ceo_background !== "N/A" ? ` (${data.incoming_ceo_background})` : "";
+    return {
+      prediction: "transition_underway",
+      confidence: "high",
+      analytical_rationale: `A named CEO successor has been publicly announced: ${succ}${bg}. The transition is confirmed and underway. Board has completed its succession planning process.`
+    };
   }
-  // If tenure < 1.5 years → new_ceo_appointed (recently changed)
+
+  // Rule 5: Very short tenure → New CEO recently appointed
   const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
-  if(!isNaN(tenureNum) && tenureNum < 1.0) {
-    return {prediction:"new_ceo_appointed", confidence:"high",
-      analytical_rationale:`${data.ceo_name} was recently appointed as CEO with only ${data.ceo_tenure_years} years of tenure. This is a recently installed CEO — the company has undergone a leadership change.`};
+  if (!isNaN(tenureNum) && tenureNum < 1.0) {
+    return {
+      prediction: "new_ceo_appointed",
+      confidence: "high",
+      analytical_rationale: `${data.ceo_name} was recently appointed as CEO with only ${data.ceo_tenure_years} years in the role. This reflects a recent leadership change at the company. Succession risk is currently low given the fresh appointment.`
+    };
   }
 
-  // ── LLM SCORING for non-obvious cases ─────────────────────────────────────
-  const raw=await callLLM(
-    `You are a CEO succession risk expert. Today is ${new Date().toDateString()}. Assess succession risk based on signals. Be calibrated — do NOT default to low_likelihood just because the CEO is well-known. Return JSON only.`,
-    `Research data:
-CEO: ${data.ceo_name}, Age: ${data.ceo_age}, Tenure: ${data.ceo_tenure_years} years, Start: ${data.ceo_start_date}
-Ownership: ${data.ownership_category}, Sector: ${data.sector}
-Revenue: ${data.revenue}, TSR 1yr: ${data.tsr_1yr}, TSR vs peers: ${data.tsr_vs_peers}
-Contract expiry: ${data.ceo_contract_expiry}, Renewed: ${data.contract_renewed}
-Activist investors: ${data.activist_investors}
-Board refreshed: ${data.board_refreshed_2yr}
-COO/President appointed: ${data.coo_or_president_appointed}
-Leadership signals: ${JSON.stringify(data.leadership_signals)}
-Finance view: ${finance.view}, Press view: ${press.view}, Industry view: ${industry.view}
-Finance concerns: ${JSON.stringify(finance.concerns)}
-Press controversies: ${JSON.stringify(press.controversies)}
+  // ── LLM SCORING — for all other non-obvious cases ────────────────────────
+  const age = parseInt(data.ceo_age) || 0;
+  const ten = tenureNum || 0;
 
-Return ONLY this JSON:
+  const raw = await callLLM(
+    `You are a CEO succession risk expert. Today is ${new Date().toDateString()}.
+Assess the succession risk level based on the data provided.
+Be accurate and calibrated — do NOT default to low_likelihood for famous long-tenured CEOs.
+Return ONLY valid JSON, no extra text.`,
+
+    `━━━ COMPANY DATA ━━━
+Company: ${data.company||""}
+Sector: ${data.sector}
+Ownership: ${data.ownership_category}
+
+━━━ CEO PROFILE ━━━
+Name: ${data.ceo_name}
+Age: ${data.ceo_age}
+Tenure: ${data.ceo_tenure_years} years  (started: ${data.ceo_start_date})
+Founder status: ${data.founder_status||"not founder"}
+
+━━━ GOVERNANCE SIGNALS ━━━
+Contract expiry: ${data.ceo_contract_expiry}
+Contract renewed: ${data.contract_renewed}
+Succession plan: ${data.succession_plan_disclosed}
+COO/President appointed: ${data.coo_or_president_appointed}
+Board refreshed (2yr): ${data.board_refreshed_2yr}
+Activist investors: ${data.activist_investors}
+
+━━━ PERFORMANCE ━━━
+Revenue: ${data.revenue}
+TSR 1yr: ${data.tsr_1yr}
+TSR 3yr: ${data.tsr_3yr}
+TSR vs peers: ${data.tsr_vs_peers}
+
+━━━ AGENT VIEWS ━━━
+Finance: ${finance.view} — ${JSON.stringify(finance.concerns)}
+Press: ${press.view} — ${JSON.stringify(press.controversies)}
+Industry: ${industry.view} — ${JSON.stringify(industry.concerns)}
+
+━━━ LEADERSHIP SIGNALS ━━━
+${JSON.stringify(data.leadership_signals)}
+
+Return this JSON:
 {"prediction":"","confidence":"","analytical_rationale":""}
 
-STRICT RULES — apply in order, stop at first match:
-1. tenure < 1yr → new_ceo_appointed (recently installed)
-2. ceo_departure_announced=yes + successor known → transition_underway
-3. ceo_departure_announced=yes + no successor → high_likelihood
-4. high_likelihood if CEO age >= 65 (mandatory retirement age at many firms)
-5. high_likelihood if age >= 63 AND tenure >= 8yr (age + long tenure = strong double signal)
-6. high_likelihood if tenure >= 12yr (extremely long tenure = high succession risk regardless of other factors)
-7. high_likelihood if 2+ of: [activist present, TSR underperformance vs peers, tenure >= 8yr, contract expiry within 12mo, age >= 60, major scandal, COO appointed as clear heir, board recently refreshed]
-8. medium_likelihood if 1 of: tenure 5-8yr, mild underperformance, contract expiry 1-2yr, age 58-62, COO appointed as potential heir
-9. low_likelihood ONLY if: tenure < 5yr AND age < 58 AND strong performance AND no activist pressure AND contract recently renewed
-10. Founder/family CEOs → lower by one level UNLESS age >= 65 or tenure >= 15yr
-11. State-owned/gov-controlled → medium_likelihood max unless political crisis
-12. analytical_rationale: 4-6 specific sentences citing actual tenure years, age, and specific signals from the data. NEVER write generic text.
-CALIBRATION: A CEO aged 64 with 14yr tenure → high_likelihood. A CEO aged 57 with 10yr tenure → medium_likelihood.`
+━━━ CLASSIFICATION RULES (apply in order, stop at first match) ━━━
+1. age >= 65                                     → high_likelihood
+2. age >= 63 AND tenure >= 8                     → high_likelihood
+3. tenure >= 12                                  → high_likelihood
+4. TWO OR MORE of these signals present:
+   • activist investor present
+   • TSR underperformance vs peers
+   • tenure >= 8 years
+   • contract expires within 12 months
+   • age >= 60
+   • major scandal or regulatory probe
+   • COO/President appointed as clear heir
+   • board recently refreshed
+                                                 → high_likelihood
+5. ONE of these signals:
+   • tenure 5–8 years
+   • mild underperformance
+   • contract expiry in 1–2 years
+   • age 58–62
+   • COO appointed (not clear heir)
+                                                 → medium_likelihood
+6. All of these true: tenure < 5yr AND age < 58 AND strong performance AND contract recently renewed AND no activist
+                                                 → low_likelihood
+7. Default if unclear                            → medium_likelihood
+
+confidence: "high" if prediction is clear-cut, "medium" if borderline, "low" if data is sparse
+analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, tenure, TSR values, signals). Never write generic boilerplate.`
   );
-  const r=parseJSON(raw,fallback);
-  r.prediction=cl(r.prediction||"low_likelihood",3);
-  r.confidence=cl(r.confidence||"low",2);
-  r.analytical_rationale=cl(r.analytical_rationale||"",80);
+
+  const r = parseJSON(raw, fallback);
+  r.prediction          = cl(r.prediction||"low_likelihood", 3);
+  r.confidence          = cl(r.confidence||"low", 2);
+  r.analytical_rationale = cl(r.analytical_rationale||"", 80);
   return r;
 }
 // ── Full pipeline ─────────────────────────────────────────────────────────────
@@ -437,16 +612,19 @@ function Detail({r}){
         </div>
         {/* CEO strip */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",background:"rgba(0,0,0,0.2)",borderRadius:7,overflow:"hidden"}}>
-          {[["CEO",r.ceo_name],["Age",!ni(r.ceo_age)?r.ceo_age:"—"],["Tenure",r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"—"],["Revenue",!ni(r.revenue)?r.revenue:"—"],["TSR 1yr",!ni(r.tsr_1yr)?r.tsr_1yr:"—"]].map(([l,v],i,a)=>(
+          {[["CEO",r.ceo_name],["Age",!ni(r.ceo_age)?r.ceo_age:"—"],["Tenure",r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"—"],["Successor",r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"?r.incoming_ceo_name:"—"],["TSR 1yr",!ni(r.tsr_1yr)?r.tsr_1yr:"—"]].map(([l,v],i,a)=>(
             <div key={l} style={{padding:"7px 8px",borderRight:i<a.length-1?"1px solid rgba(255,255,255,0.06)":"none"}}>
               <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:700,marginBottom:2}}>{l}</div>
               <div style={{fontSize:14,fontWeight:700,color:C.white,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v||"—"}</div>
             </div>
           ))}
         </div>
-        {r.incoming_ceo_announced==="yes"&&(
-          <div style={{marginTop:8,background:"rgba(255,220,0,0.1)",border:"1px solid rgba(255,200,0,0.25)",borderRadius:6,padding:"6px 10px",fontSize:11,color:"#FFE066"}}>
-            ⚡ <strong>Incoming CEO:</strong> {r.incoming_ceo_name} — {r.incoming_ceo_background} (starts {r.incoming_ceo_start_date})
+        {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"&&(
+          <div style={{marginTop:8,background:"rgba(255,200,0,0.15)",border:"1px solid rgba(255,200,0,0.4)",borderRadius:7,padding:"8px 12px",fontSize:12}}>
+            <span style={{color:"#FFD700",fontWeight:900}}>⚡ SUCCESSOR NAMED: </span>
+            <span style={{color:"#FFF",fontWeight:700}}>{r.incoming_ceo_name}</span>
+            {r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"&&<span style={{color:"rgba(255,255,255,0.6)"}}> — {r.incoming_ceo_background}</span>}
+            {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"&&<span style={{color:"rgba(255,255,255,0.5)"}}> · Starts: {r.incoming_ceo_start_date}</span>}
           </div>
         )}
         {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&(
