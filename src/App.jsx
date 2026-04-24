@@ -150,7 +150,7 @@ Examples of what to look for:
 - Any press release, board announcement, or regulatory filing confirming a named successor
 - Any transition plan where a specific person is confirmed to take over
 
-ALWAYS check for successor announcements — this is the most important question.`;
+ALWAYS check for successor announcements — this is the most important question like there is ceo annoucement for babcock ceo that is Herry Holt will be replacing David Lockwood and For apple Tim cook will step down and John Ternus will be the new ceo.`;
 
   // Always make both calls — plugin may or may not fire, model knowledge always works
   const results = [];
