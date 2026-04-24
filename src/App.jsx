@@ -27,8 +27,8 @@ const C = {
   ink:"#1A1714",        // near-black text
   ink2:"#FFFFFF",       // sidebar / drawer bg
   ink3:"#F9F8F5",       // subtle off-white
-  slate:"#6B6560",      // secondary text
-  mid:"#9B9591",        // tertiary text / labels
+  slate:"#3D3935",      // secondary text
+  mid:"#6B6560",        // tertiary text / labels
   muted:"#B8B4AF",      // placeholder text
   pale:"#D4D0CB",       // borders
   // Surface
@@ -1060,8 +1060,8 @@ function KV({label,val,hi=false}){
       padding:"10px 13px",
       boxShadow:"0 1px 2px rgba(0,0,0,0.04)"
     }}>
-      <div style={{fontSize:10,color:hi?C.red:C.mid,textTransform:"uppercase",letterSpacing:"0.09em",fontWeight:600,marginBottom:4}}>{label}</div>
-      <div style={{fontSize:14,fontWeight:700,color:hi?C.redD:C.ink,lineHeight:1.3}}>{val}</div>
+      <div style={{fontSize:11,color:hi?C.red:C.mid,textTransform:"uppercase",letterSpacing:"0.07em",fontWeight:700,marginBottom:5}}>{label}</div>
+      <div style={{fontSize:15,fontWeight:700,color:hi?C.redD:C.ink,lineHeight:1.3}}>{val}</div>
     </div>
   );
 }
@@ -1089,12 +1089,12 @@ function AgentView({label,view,signals=[],concerns=[]}){
         }}>{VIEW_LABEL[view]||view}</span>
       </div>
       {signals.filter(s=>s&&safeStr(s).length>2).map((s,i)=>(
-        <div key={i} style={{fontSize:12,color:C.slate,marginBottom:5,display:"flex",gap:7,lineHeight:1.5}}>
+        <div key={i} style={{fontSize:14,color:C.slate,marginBottom:6,display:"flex",gap:7,lineHeight:1.5}}>
           <span style={{color:C.red,flexShrink:0,marginTop:1}}>—</span>{safeStr(s)}
         </div>
       ))}
       {concerns.filter(s=>s&&safeStr(s).length>2).map((s,i)=>(
-        <div key={i} style={{fontSize:12,color:C.redD,marginBottom:5,display:"flex",gap:7,lineHeight:1.5}}>
+        <div key={i} style={{fontSize:14,color:C.redD,marginBottom:6,display:"flex",gap:7,lineHeight:1.5}}>
           <span style={{color:C.red,flexShrink:0,marginTop:1}}>!</span>{safeStr(s)}
         </div>
       ))}
@@ -1105,7 +1105,7 @@ function AgentView({label,view,signals=[],concerns=[]}){
 function Blist({items,col=C.red}){
   const safeStr = v => (v && typeof v === "object") ? JSON.stringify(v) : String(v||"");
   return items.filter(item=>item&&safeStr(item).length>2).map((item,i)=>(
-    <div key={i} style={{display:"flex",gap:9,marginBottom:7,fontSize:13,color:C.slate,alignItems:"flex-start",lineHeight:1.5}}>
+    <div key={i} style={{display:"flex",gap:9,marginBottom:8,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.5}}>
       <span style={{color:col,fontWeight:700,flexShrink:0,fontSize:10,marginTop:3}}>—</span>
       {safeStr(item)}
     </div>
@@ -1301,11 +1301,11 @@ function Detail({r}){
                 {r.press_signals?.filter(s=>s&&String(s).length>3).length>0
                   ?<Blist items={r.press_signals.filter(s=>s&&String(s).length>3)} col={C.red}/>
                   :r.press_controversies&&!ni(r.press_controversies)
-                    ?<div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.press_controversies}</div>
+                    ?<div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.press_controversies}</div>
                     :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>
                 }
                 {r.investor_activism&&!ni(r.investor_activism)&&!["none identified","not clearly"].some(x=>r.investor_activism.toLowerCase().includes(x))&&(
-                  <div style={{marginTop:8,padding:"7px 10px",background:"#FEF2F2",borderRadius:5,fontSize:12,color:C.redD}}>
+                  <div style={{marginTop:8,padding:"7px 10px",background:"#FEF2F2",borderRadius:5,fontSize:13,color:C.redD}}>
                     <strong>Activist detail:</strong> {r.investor_activism}
                   </div>
                 )}
@@ -1325,7 +1325,7 @@ function Detail({r}){
               <div style={{background:`linear-gradient(135deg,${C.redDD},${C.redD})`,borderRadius:8,padding:"16px 20px",position:"relative",overflow:"hidden"}}>
                 <div style={{position:"absolute",right:-15,top:-15,width:80,height:80,borderRadius:"50%",background:"rgba(255,255,255,0.04)"}}/>
                 <div style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.55)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:8}}>Board-Ready Rationale</div>
-                <div style={{fontSize:14,color:"#fff",lineHeight:1.75,fontWeight:400}}>{r.analytical_rationale}</div>
+                <div style={{fontSize:15,color:"#fff",lineHeight:1.75,fontWeight:400}}>{r.analytical_rationale}</div>
               </div>
             )}
           </div>
@@ -1341,7 +1341,7 @@ function Detail({r}){
             {r.financial_summary&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginTop:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial Summary</SH>
-                <div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.financial_summary}</div>
+                <div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.financial_summary}</div>
               </div>
             )}
           </div>
@@ -1370,7 +1370,7 @@ function Detail({r}){
             {!ni(r.mandate_signals)&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Mandate Signals</SH>
-                <div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.mandate_signals}</div>
+                <div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.mandate_signals}</div>
               </div>
             )}
           </div>
@@ -1389,7 +1389,7 @@ function Detail({r}){
             {!ni(r.investor_activism)&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Investor Activism Detail</SH>
-                <div style={{fontSize:13,color:C.slate,lineHeight:1.5}}>{r.investor_activism}</div>
+                <div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.investor_activism}</div>
               </div>
             )}
           </div>
@@ -1413,7 +1413,7 @@ function Detail({r}){
             {r.financial_summary&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial Summary</SH>
-                <div style={{fontSize:13,color:C.slate,lineHeight:1.6}}>{r.financial_summary}</div>
+                <div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.financial_summary}</div>
               </div>
             )}
           </div>
@@ -1449,7 +1449,7 @@ function Detail({r}){
               </div>
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:7,padding:"13px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <div style={{fontSize:9,color:C.mid,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:5}}>QC Summary</div>
-                <div style={{fontSize:11,color:C.ink,lineHeight:1.55}}>{r.qc_summary||"No QC summary available."}</div>
+                <div style={{fontSize:13,color:C.ink,lineHeight:1.6}}>{r.qc_summary||"No QC summary available."}</div>
               </div>
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:7,padding:"13px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <div style={{fontSize:9,color:C.mid,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:5}}>Company Identity</div>
@@ -1477,9 +1477,9 @@ function Detail({r}){
                 const sbg = isGood?"#F0FDF4":isBad?"#FEF2F2":"#FFFBEB";
                 return(
                   <div key={i} style={{display:"grid",gridTemplateColumns:"130px 1fr 110px",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.border}`,alignItems:"start"}}>
-                    <div style={{fontSize:11,fontWeight:600,color:C.ink}}>{label}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{label}</div>
                     <div>
-                      <div style={{fontSize:11,color:C.ink}}>{value||"—"}</div>
+                      <div style={{fontSize:13,color:C.ink}}>{value||"—"}</div>
                       {note&&<div style={{fontSize:10,color:C.mid,marginTop:2}}>{note}</div>}
                     </div>
                     <div style={{background:sbg,borderRadius:3,padding:"3px 8px",fontSize:10,fontWeight:700,color:sc,textAlign:"center"}}>{status||"—"}</div>
@@ -1513,7 +1513,7 @@ function Detail({r}){
                   <div>
                     <div style={{fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:7}}>Arguments Against</div>
                     {r.challenge_points.map((p,i)=>(
-                      <div key={i} style={{display:"flex",gap:7,marginBottom:6,fontSize:12,color:C.slate,alignItems:"flex-start",lineHeight:1.5}}>
+                      <div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}>
                         <span style={{color:C.red,flexShrink:0,fontWeight:700}}>✗</span>
                         {typeof p === "object" ? JSON.stringify(p) : String(p||"")}
                       </div>
@@ -1522,7 +1522,7 @@ function Detail({r}){
                   <div>
                     <div style={{fontSize:10,fontWeight:700,color:C.ok,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:7}}>Reasons It Still Holds</div>
                     {(r.overriding_factors||[]).map((p,i)=>(
-                      <div key={i} style={{display:"flex",gap:7,marginBottom:6,fontSize:12,color:C.slate,alignItems:"flex-start",lineHeight:1.5}}>
+                      <div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}>
                         <span style={{color:C.ok,flexShrink:0,fontWeight:700}}>✓</span>
                         {typeof p === "object" ? JSON.stringify(p) : String(p||"")}
                       </div>
@@ -1530,7 +1530,7 @@ function Detail({r}){
                   </div>
                 </div>
                 {r.challenge_summary&&(
-                  <div style={{marginTop:10,padding:"9px 12px",background:"#F9F8F5",borderRadius:5,fontSize:12,color:C.ink,lineHeight:1.6,border:`1px solid ${C.border}`}}>
+                  <div style={{marginTop:10,padding:"9px 12px",background:"#F9F8F5",borderRadius:5,fontSize:13,color:C.ink,lineHeight:1.6,border:`1px solid ${C.border}`}}>
                     <strong>Challenge verdict:</strong> {r.challenge_summary}
                   </div>
                 )}
@@ -1713,117 +1713,120 @@ export default function App(){
         </div>
       </div>
 
-      {/* ── INPUT DRAWER ── */}
+      {/* ── INPUT DRAWER — compact single row ── */}
       {showIn&&(
-        <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0,boxShadow:"0 2px 6px rgba(0,0,0,0.05)"}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 240px",alignItems:"stretch"}}>
+        <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:0,padding:"0",height:48}}>
 
-            {/* Left: input area */}
-            <div style={{padding:"14px 20px",borderRight:`1px solid ${C.border}`}}>
-              <div style={{display:"flex",gap:0,marginBottom:10,borderBottom:`1px solid ${C.border}`}}>
-                {[["manual","Manual Entry"],["file","CSV Upload"]].map(([id,l])=>(
-                  <button key={id} onClick={()=>setITab(id)} style={{
-                    padding:"6px 14px",border:"none",cursor:"pointer",
-                    fontSize:12,fontWeight:600,
-                    background:"transparent",
-                    color:iTab===id?C.red:C.mid,
-                    borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent"
-                  }}>{l}</button>
-                ))}
-              </div>
+            {/* Tab switcher */}
+            <div style={{display:"flex",height:"100%",borderRight:`1px solid ${C.border}`,flexShrink:0}}>
+              {[["manual","Manual"],["file","File Upload"]].map(([id,l])=>(
+                <button key={id} onClick={()=>setITab(id)} style={{
+                  padding:"0 16px",border:"none",cursor:"pointer",height:"100%",
+                  fontSize:12,fontWeight:600,background:"transparent",
+                  color:iTab===id?C.red:C.mid,
+                  borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent",
+                  whiteSpace:"nowrap"
+                }}>{l}</button>
+              ))}
+            </div>
+
+            {/* Input area */}
+            <div style={{flex:1,padding:"0 14px",display:"flex",alignItems:"center",gap:10,height:"100%",overflow:"hidden"}}>
               {iTab==="manual"?(
-                <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <>
                   <textarea
                     value={txt}
                     onChange={e=>setTxt(e.target.value)}
-                    rows={3}
+                    rows={2}
                     placeholder={"Apple Inc, AAPL\nMicrosoft, MSFT\nBabcock International, BAB"}
                     style={{
-                      flex:1,borderRadius:5,
-                      border:`1px solid ${C.border}`,
-                      padding:"8px 12px",fontSize:12,
-                      fontFamily:"'DM Sans',monospace",
+                      flex:1,border:`1px solid ${C.border}`,borderRadius:4,
+                      padding:"5px 10px",fontSize:12,
                       color:C.ink,background:C.white,
-                      lineHeight:1.7,resize:"none"
-                    }}/>
-                  <div style={{fontSize:11,color:C.mid,lineHeight:2.2,whiteSpace:"nowrap"}}>One per line<br/>Name, TICKER<br/>Max 20</div>
-                </div>
+                      fontFamily:"'DM Sans',monospace",
+                      resize:"none",lineHeight:1.5,
+                      height:36
+                    }}
+                  />
+                  <span style={{fontSize:11,color:C.mid,whiteSpace:"nowrap",flexShrink:0}}>One per line<br/>Name, TICKER · Max 20</span>
+                </>
               ):(
-                <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <>
                   <div
                     onClick={()=>fRef.current.click()}
                     style={{
-                      flex:1,border:`1.5px dashed #FECACA`,
-                      borderRadius:6,padding:"12px",
-                      textAlign:"center",cursor:"pointer",
-                      background:"#FEF2F2"
+                      display:"flex",alignItems:"center",gap:8,
+                      border:`1px dashed #FECACA`,borderRadius:4,
+                      padding:"5px 14px",cursor:"pointer",background:"#FEF2F2",
+                      height:32
                     }}
                     onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
                     onMouseLeave={e=>e.currentTarget.style.borderColor="#FECACA"}>
-                    <div style={{fontSize:12,fontWeight:600,color:C.red}}>Upload CSV or Excel</div>
-                    <div style={{fontSize:11,color:C.mid,marginTop:3}}>.csv · .xlsx · .xls — company, ticker columns</div>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3-3 3 3M2 11h10" stroke={C.red} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    <span style={{fontSize:12,fontWeight:600,color:C.red}}>Upload CSV or Excel</span>
                     <input ref={fRef} type="file" accept=".csv,.xlsx,.xls,.xlsm" style={{display:"none"}} onChange={handleFile}/>
                   </div>
-                  {fileCos.length>0&&<div style={{fontSize:12,color:C.ok,fontWeight:600}}>{fileCos.length} companies loaded</div>}
-                </div>
+                  {fileCos.length>0
+                    ?<span style={{fontSize:12,color:C.ok,fontWeight:600}}>{fileCos.length} companies loaded</span>
+                    :<span style={{fontSize:11,color:C.mid}}>.csv · .xlsx · .xls</span>
+                  }
+                </>
               )}
-              {err&&(
-                <div style={{marginTop:8,padding:"6px 10px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:5,fontSize:11,color:C.red}}>{err}</div>
-              )}
+              {err&&<span style={{fontSize:11,color:C.red,flexShrink:0}}>{err}</span>}
             </div>
 
-            {/* Right: run button + stats */}
-            <div style={{padding:"14px 16px",display:"flex",flexDirection:"column",justifyContent:"center",gap:10,background:"#F9F8F5"}}>
+            {/* Run + export buttons */}
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"0 12px",borderLeft:`1px solid ${C.border}`,height:"100%",flexShrink:0}}>
+              {results.length>0&&!running&&(
+                <button onClick={()=>exportToExcel(results)} style={{
+                  padding:"6px 14px",background:C.white,color:C.ok,
+                  border:`1px solid ${C.ok}`,borderRadius:4,
+                  fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"
+                }}>Export CSV</button>
+              )}
               <button
                 onClick={run}
                 disabled={running}
                 style={{
-                  padding:"11px 0",width:"100%",
+                  padding:"7px 20px",
                   background:running?"#E8E5DF":C.red,
                   color:running?C.mid:"#fff",
-                  border:"none",borderRadius:5,
+                  border:"none",borderRadius:4,
                   fontSize:13,fontWeight:700,
                   cursor:running?"not-allowed":"pointer",
-                  boxShadow:running?"none":"0 2px 12px rgba(163,0,0,0.28)",
-                  letterSpacing:"0.01em"
+                  boxShadow:running?"none":"0 2px 10px rgba(163,0,0,0.25)",
+                  whiteSpace:"nowrap"
                 }}>
-                {running?`Running ${prog.d} of ${prog.t}…`:"Run Pipeline"}
+                {running?`Running ${prog.d}/${prog.t}…`:"Run Pipeline"}
               </button>
-
-              {results.length>0&&!running&&(
-                <button onClick={()=>exportToExcel(results)} style={{
-                  padding:"9px 0",width:"100%",
-                  background:C.white,color:C.ok,
-                  border:`1px solid ${C.ok}`,
-                  borderRadius:5,fontSize:12,fontWeight:600,cursor:"pointer"
-                }}>Export to CSV</button>
-              )}
-
-              {running&&(
-                <div>
-                  <PBar v={prog.d} t={prog.t}/>
-                  <div style={{fontSize:11,color:C.mid,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{logs[logs.length-1]||""}</div>
-                </div>
-              )}
-
-              {results.length>0&&!running&&(
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5}}>
-                  {[
-                    {l:"Total",v:results.length,c:C.ink},
-                    {l:"New CEO",v:pc.new_ceo_appointed||0,c:C.red},
-                    {l:"Transition",v:pc.transition_underway||0,c:C.red},
-                    {l:"High",v:pc.high_likelihood||0,c:C.red},
-                    {l:"Medium",v:pc.medium_likelihood||0,c:C.warn},
-                    {l:"Low",v:pc.low_likelihood||0,c:C.ok}
-                  ].map(({l,v,c})=>(
-                    <div key={l} style={{background:C.white,borderRadius:5,padding:"7px 4px",textAlign:"center",border:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:18,fontWeight:800,color:c,lineHeight:1}}>{v}</div>
-                      <div style={{fontSize:10,color:C.mid,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginTop:3}}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
+
+            {/* Stats — shown inline after run */}
+            {results.length>0&&!running&&(
+              <div style={{display:"flex",gap:12,padding:"0 14px",borderLeft:`1px solid ${C.border}`,height:"100%",alignItems:"center",flexShrink:0}}>
+                {[
+                  {l:"Total",v:results.length,c:C.ink},
+                  {l:"High",v:(pc.new_ceo_appointed||0)+(pc.transition_underway||0)+(pc.high_likelihood||0),c:C.red},
+                  {l:"Medium",v:pc.medium_likelihood||0,c:C.warn},
+                  {l:"Low",v:pc.low_likelihood||0,c:C.ok}
+                ].map(({l,v,c})=>(
+                  <div key={l} style={{textAlign:"center"}}>
+                    <div style={{fontSize:16,fontWeight:800,color:c,lineHeight:1}}>{v}</div>
+                    <div style={{fontSize:9,color:C.mid,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginTop:2}}>{l}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Progress — shown while running */}
+            {running&&(
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"0 14px",borderLeft:`1px solid ${C.border}`,minWidth:200,flexShrink:0}}>
+                <div style={{flex:1}}><PBar v={prog.d} t={prog.t}/></div>
+                <div style={{fontSize:11,color:C.mid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{logs[logs.length-1]||""}</div>
+              </div>
+            )}
+
           </div>
         </div>
       )}
