@@ -578,6 +578,93 @@ async function runPipeline(company, ticker, log) {
   };
 }
 
+// ── Export to Excel ──────────────────────────────────────────────────────────
+function exportToExcel(results) {
+  const PRED_LABEL_MAP = {
+    new_ceo_appointed:"New CEO Appointed", transition_underway:"Transition Underway",
+    high_likelihood:"High Likelihood", medium_likelihood:"Medium Likelihood",
+    low_likelihood:"Low Likelihood"
+  };
+
+  // Column definitions — every KPI the tool produces
+  const cols = [
+    // Identity
+    { key:"company",              label:"Company"                        },
+    { key:"ticker",               label:"Ticker"                         },
+    { key:"sector",               label:"Sector"                         },
+    { key:"ownership_category",   label:"Ownership Type"                 },
+    // CEO Profile
+    { key:"ceo_name",             label:"CEO Name"                       },
+    { key:"ceo_age",              label:"CEO Age"                        },
+    { key:"ceo_start_date",       label:"CEO Start Date"                 },
+    { key:"ceo_tenure_years",     label:"CEO Tenure (Years)"             },
+    { key:"founder_status",       label:"Founder Status"                 },
+    // Succession Status
+    { key:"ceo_departure_announced", label:"Departure Announced"         },
+    { key:"incoming_ceo_announced",  label:"Successor Announced"         },
+    { key:"incoming_ceo_name",       label:"Incoming CEO Name"           },
+    { key:"incoming_ceo_background", label:"Incoming CEO Background"     },
+    { key:"incoming_ceo_start_date", label:"Incoming CEO Start Date"     },
+    // Prediction
+    { key:"prediction",           label:"Prediction",        fmt: v => PRED_LABEL_MAP[v]||v },
+    { key:"confidence",           label:"Confidence"                     },
+    { key:"investor_impact",      label:"Investor Impact"                },
+    { key:"analytical_rationale", label:"Board-Ready Rationale"          },
+    // Financial KPIs
+    { key:"revenue",              label:"Revenue"                        },
+    { key:"tsr_1yr",              label:"TSR 1yr"                        },
+    { key:"tsr_3yr",              label:"TSR 3yr"                        },
+    { key:"tsr_vs_peers",         label:"TSR vs Peers"                   },
+    { key:"financial_summary",    label:"Financial Summary"              },
+    // Governance KPIs
+    { key:"ceo_contract_expiry",  label:"Contract Expiry"                },
+    { key:"contract_renewed",     label:"Contract Renewed"               },
+    { key:"succession_plan_disclosed", label:"Succession Plan"           },
+    { key:"coo_or_president_appointed", label:"COO / President Appointed"},
+    { key:"board_refreshed_2yr",  label:"Board Refreshed (2yr)"          },
+    { key:"activist_investors",   label:"Activist Investors"             },
+    { key:"investor_activism",    label:"Activism Detail"                },
+    { key:"mandate_signals",      label:"Mandate Signals"                },
+    // Agent Views
+    { key:"finance_view",         label:"Finance Agent View"             },
+    { key:"press_view",           label:"Press Agent View"               },
+    { key:"industry_view",        label:"Industry Agent View"            },
+    // Signals
+    { key:"press_controversies",  label:"Press Controversies"            },
+    { key:"leadership_signals",   label:"Leadership Signals",  fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"financial_signals",    label:"Financial Signals",   fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"press_signals",        label:"Press Signals",       fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"industry_signals",     label:"Industry Signals",    fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"finance_concerns",     label:"Finance Concerns",    fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"press_concerns",       label:"Press Concerns",      fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"industry_concerns",    label:"Industry Concerns",   fmt: v => Array.isArray(v)?v.join(" | "):v },
+  ];
+
+  // Build CSV content
+  const escape = v => {
+    const s = String(v ?? "").replace(/"/g, '""');
+    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
+  };
+
+  const header = cols.map(c => escape(c.label)).join(",");
+  const rows = results.map(r =>
+    cols.map(c => {
+      const raw = r[c.key] ?? "";
+      const val = c.fmt ? c.fmt(raw) : raw;
+      return escape(val);
+    }).join(",")
+  );
+
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── UI Components ─────────────────────────────────────────────────────────────
 
 function PredBadge({pred,sm=false}){
@@ -1071,6 +1158,11 @@ export default function App(){
               <button onClick={run} disabled={running} style={{padding:"10px 0",width:"100%",background:running?"rgba(255,255,255,0.07)":C.red,color:running?C.slate:C.white,border:"none",borderRadius:7,fontSize:12,fontWeight:800,cursor:running?"not-allowed":"pointer",boxShadow:running?"none":`0 4px 18px rgba(204,0,0,0.35)`}}>
                 {running?`⏳ ${prog.d}/${prog.t}…`:"▶  Run Pipeline"}
               </button>
+              {results.length>0&&!running&&(
+                <button onClick={()=>exportToExcel(results)} style={{padding:"8px 0",width:"100%",background:"transparent",color:C.ok,border:`1px solid ${C.ok}`,borderRadius:7,fontSize:11,fontWeight:800,cursor:"pointer"}}>
+                  ↓  Export to Excel
+                </button>
+              )}
               {running&&<div><PBar v={prog.d} t={prog.t}/><div style={{fontSize:9,color:C.slate,marginTop:3,fontFamily:"monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:11}}>{logs[logs.length-1]||""}</div></div>}
               {results.length>0&&!running&&(
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5}}>
