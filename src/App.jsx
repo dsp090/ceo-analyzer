@@ -156,19 +156,13 @@ ALWAYS check for successor announcements — this is the most important question
   const results = [];
   try {
     const r1 = await callLLM(sys, prompt, true);
-    if (r1 && r1.length > 30) results.push("SEARCH:
-" + r1);
+    if (r1 && r1.length > 30) results.push("SEARCH:\n" + r1);
   } catch {}
   try {
     const r2 = await callLLM(sys, prompt, false);
-    if (r2 && r2.length > 30) results.push("KNOWLEDGE:
-" + r2);
+    if (r2 && r2.length > 30) results.push("KNOWLEDGE:\n" + r2);
   } catch {}
-  return results.length ? results.join("
-
----
-
-") : `No data found for ${company}.`;
+  return results.length ? results.join("\n\n---\n\n") : `No data found for ${company}.`;
 }
 // ── Agent 2: Research — build full CEO profile from news + training data ──────
 async function agentResearch(company, ticker, webCtx) {
@@ -868,17 +862,10 @@ async function runPipeline(company, ticker, log) {
     finance_view:finance.view, press_view:press.view, industry_view:industry.view,
     finance_concerns:finance.concerns, press_concerns:press.concerns, industry_concerns:industry.concerns,
     // Extra insight fields
-    tsr_3yr:data.tsr_3yr,
     performance_trajectory:data.performance_trajectory||"",
     m_and_a_activity:data.m_and_a_activity||"",
     regulatory_scrutiny:data.regulatory_scrutiny||"",
-    succession_plan_disclosed:data.succession_plan_disclosed||"",
-    coo_or_president_appointed:data.coo_or_president_appointed||"",
-    board_refreshed_2yr:data.board_refreshed_2yr||"",
     investor_impact:pred.investor_impact||"",
-    // Successor (from validation correction if missed by research)
-    incoming_ceo_name: data.incoming_ceo_name,
-    incoming_ceo_announced: data.incoming_ceo_announced,
     successor_found_by_validation: validation.successor_found||false,
     // Challenge agent
     challenge_points:     challenge.challenge_points||[],
