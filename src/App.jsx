@@ -75,6 +75,33 @@ function parseJSON(text, fallback={}) {
   try { const s=text.indexOf("{"),e=text.lastIndexOf("}")+1; return s!==-1?JSON.parse(text.slice(s,e)):fallback; } catch{ return fallback; }
 }
 
+// Normalise any revenue string to "$XXbn" USD format
+// Handles: €38.8bn, £5.2bn, ¥4.2tn, $391bn, $47.9bn, "47.9 billion", "391 billion USD"
+const FX = { "€":1.08, "£":1.27, "¥":0.0067, "￥":0.0067, "A$":0.65, "C$":0.73, "CHF":1.12, "kr":0.093 };
+function normaliseRevenue(s) {
+  if(!s||ni(s)) return s;
+  const raw = String(s).trim();
+  // Extract currency symbol
+  let fx = 1;
+  for(const [sym,rate] of Object.entries(FX)){
+    if(raw.startsWith(sym)||raw.includes(" "+sym)){fx=rate;break;}
+  }
+  // Extract numeric value
+  const numMatch = raw.match(/([\d,.]+)\s*(trillion|tn|billion|bn|million|m|b)/i);
+  if(!numMatch) return raw; // can't parse, return as-is
+  const num = parseFloat(numMatch[1].replace(/,/g,""));
+  const unit = numMatch[2].toLowerCase();
+  let usdBn;
+  if(unit==="trillion"||unit==="tn") usdBn = num * 1000 * fx;
+  else if(unit==="billion"||unit==="bn"||unit==="b") usdBn = num * fx;
+  else if(unit==="million"||unit==="m") usdBn = num / 1000 * fx;
+  else return raw;
+  // Format
+  if(usdBn >= 1000) return `$${(usdBn/1000).toFixed(1)}tn`;
+  if(usdBn >= 1)    return `$${usdBn.toFixed(1)}bn`;
+  return `$${(usdBn*1000).toFixed(0)}m`;
+}
+
 // ── Portkey call ──────────────────────────────────────────────────────────────
 async function callLLM(sys, usr, webSearch=false) {
   const body = {
@@ -291,7 +318,7 @@ Return this exact JSON structure:
 Field constraints:
 - ownership_category: founder_ceo | family_ceo | founder_family_control_non_ceo | government_controlled | state_owned_enterprise | professionally_managed | unclear
 - ceo_departure_announced / incoming_ceo_announced: "yes" or "no" only
-- revenue: USD only, format $XXbn or $XXXm — USE YOUR KNOWLEDGE, do not return "not clearly inferable" for major public companies
+- revenue: USD ONLY, format $XXbn (billions) or $XXXm (millions) — always convert to USD, never use €/£/¥. USE YOUR KNOWLEDGE, do not return "not clearly inferable" for major public companies
 - tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%" — USE YOUR KNOWLEDGE for well-known companies
 - ceo_age: integer — USE YOUR KNOWLEDGE, do not return "not publicly disclosed" for well-known CEOs
 - All list fields: max 4 items, 20 words each
@@ -375,7 +402,7 @@ view: high_influence | medium_influence | weak_influence | no_clear_influence
 financial_facts: up to 4 items — SPECIFIC figures e.g. "Revenue $28bn FY2024, up 4% YoY", "TSR -12% vs sector median +8% over 3 years"
 signals: up to 3 SPECIFIC financial pressure signals with actual numbers
 concerns: up to 2 concrete financial risks that could accelerate CEO change
-revenue: format as $XXbn or $XXXm — use actual figure if known
+revenue: USD only, format as $XXbn (billions) — always convert non-USD currencies to USD. Use actual figure if known.
 tsr_1yr / tsr_3yr: use actual % if known
 tsr_vs_peers: "above median", "below median", or specific figure
 ⚠ Every item must be factual and specific. No generic observations.
@@ -387,7 +414,7 @@ tsr_vs_peers: "above median", "below median", or specific figure
   r.financial_facts = lst(r.financial_facts, 4, 25);
   r.signals = lst(r.signals, 3, 25);
   r.concerns = lst(r.concerns, 2, 25);
-  r.revenue = cl(r.revenue||data.revenue||"not clearly inferable", 10)||"not clearly inferable";
+  r.revenue = normaliseRevenue(cl(r.revenue||data.revenue||"not clearly inferable", 10)||"not clearly inferable");
   r.tsr_1yr = cl(r.tsr_1yr||data.tsr_1yr||"not clearly inferable", 8)||data.tsr_1yr||"not clearly inferable";
   r.tsr_3yr = cl(r.tsr_3yr||data.tsr_3yr||"not clearly inferable", 8)||data.tsr_3yr||"not clearly inferable";
   r.tsr_vs_peers = cl(r.tsr_vs_peers||data.tsr_vs_peers||"not clearly inferable", 10)||data.tsr_vs_peers||"not clearly inferable";
@@ -857,7 +884,7 @@ async function runPipeline(company, ticker, log) {
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
-    revenue:finance.revenue||data.revenue,
+    revenue:normaliseRevenue(finance.revenue||data.revenue),
     financial_summary:Array.isArray(finance.financial_facts)?finance.financial_facts.filter(Boolean).join(" | "):String(finance.financial_facts||""),
     // TSR: prefer finance agent enrichment over research agent (finance does deeper lookup)
     tsr_1yr:   (finance.tsr_1yr   &&!finance.tsr_1yr.includes("inferable"))   ? finance.tsr_1yr   : data.tsr_1yr,
