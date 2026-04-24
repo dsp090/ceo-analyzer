@@ -82,6 +82,40 @@ async function callLLM(sys, usr, webSearch=false) {
   return d.choices?.[0]?.message?.content?.trim()||"";
 }
 
+// ── Financial Data Fetch — dedicated lookup for TSR, revenue, performance ────
+async function fetchFinancialData(company, ticker) {
+  const today = new Date().toDateString();
+  const yr    = new Date().getFullYear();
+
+  const prompt = `Today is ${today}. Provide specific financial data for "${company}" (${ticker||""}):
+
+1. REVENUE: What is the latest annual revenue? (e.g. "$391bn FY2024")
+2. TSR 1yr: What is the 1-year total shareholder return? (e.g. "+28%" or "-12%")
+3. TSR 3yr: What is the 3-year annualised TSR? (e.g. "+15% p.a.")
+4. TSR VS PEERS: Is TSR above or below the sector median? By how much?
+5. EARNINGS TREND: Revenue growth trend last 2 years? Any profit warnings?
+6. ANALYST CONSENSUS: Current analyst rating? Any recent upgrades/downgrades?
+7. MARGIN TREND: Are operating margins expanding or contracting?
+
+Be specific with actual numbers. Use your training knowledge — do not say "not available" for major public companies.`;
+
+  try {
+    const r = await callLLM(
+      `You are a financial analyst with deep knowledge of public company financials. Today is ${today}. Provide actual numbers.`,
+      prompt, true
+    );
+    if (r && r.length > 30) return r;
+    throw new Error("empty");
+  } catch {
+    try {
+      return await callLLM(
+        `You are a financial analyst. Today is ${today}. Use your training knowledge to answer.`,
+        prompt, false
+      );
+    } catch { return "Financial data not available."; }
+  }
+}
+
 // ── Agent 1: CEO News — dual-call strategy (web search + model knowledge) ────
 async function fetchCEONews(company) {
   const today = new Date().toDateString();
@@ -239,9 +273,12 @@ Return this exact JSON structure:
 Field constraints:
 - ownership_category: founder_ceo | family_ceo | founder_family_control_non_ceo | government_controlled | state_owned_enterprise | professionally_managed | unclear
 - ceo_departure_announced / incoming_ceo_announced: "yes" or "no" only
-- revenue: USD only, format $XXbn or $XXXm
-- tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%"
-- All list fields: max 4 items, 20 words each`
+- revenue: USD only, format $XXbn or $XXXm — USE YOUR KNOWLEDGE, do not return "not clearly inferable" for major public companies
+- tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%" — USE YOUR KNOWLEDGE for well-known companies
+- ceo_age: integer — USE YOUR KNOWLEDGE, do not return "not publicly disclosed" for well-known CEOs
+- All list fields: max 4 items, 20 words each
+
+CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST use your training knowledge to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you know.`
   );
 
   const d = parseJSON(raw, fallback);
@@ -323,7 +360,9 @@ concerns: up to 2 concrete financial risks that could accelerate CEO change
 revenue: format as $XXbn or $XXXm — use actual figure if known
 tsr_1yr / tsr_3yr: use actual % if known
 tsr_vs_peers: "above median", "below median", or specific figure
-⚠ Every item must be factual and specific. No generic observations.`
+⚠ Every item must be factual and specific. No generic observations.
+⚠ For major public companies, USE YOUR TRAINING KNOWLEDGE to fill in actual TSR and revenue figures.
+   Do NOT return "not clearly inferable" for Apple, Microsoft, Airbus, ArcelorMittal etc — you know these numbers.`
   );
   const r = parseJSON(raw, fallback);
   r.view = cl(r.view||"no_clear_influence", 3);
@@ -351,10 +390,11 @@ Draw on your full knowledge of activist campaigns, proxy battles, shareholder le
 Return ONLY valid JSON.`,
 
     `Company: ${data.company||""}  |  Ticker: ${data.ticker||""}  |  Sector: ${data.sector}
-CEO: ${data.ceo_name}  |  Tenure: ${data.ceo_tenure_years} years
-TSR 1yr: ${data.tsr_1yr}  |  TSR vs peers: ${data.tsr_vs_peers}
+CEO: ${data.ceo_name}  |  Age: ${data.ceo_age}  |  Tenure: ${data.ceo_tenure_years} years
+TSR 1yr: ${data.tsr_1yr}  |  TSR vs peers: ${data.tsr_vs_peers}  |  Revenue: ${data.revenue}
 Known activist data: ${data.activist_investors}
 Known press signals: ${JSON.stringify(data.press_activism_signals)}
+IMPORTANT: Use your full training knowledge about this specific company. Search for any known activist campaigns, controversies, or governance issues for ${data.company||""} (${data.ticker||""}).
 
 ━━━ DEEP DIVE TASKS ━━━
 1. ACTIVIST INVESTORS: Are there any known activist hedge funds or shareholders (e.g. Elliott, ValueAct, Cevian, Third Point, Starboard) with a stake in this company? What is their stated position?
@@ -505,7 +545,8 @@ async function agentPrediction(data, finance, press, industry) {
   const raw = await callLLM(
     `You are a CEO succession risk expert. Today is ${new Date().toDateString()}.
 Assess the succession risk level based on the data provided.
-Be accurate and calibrated — do NOT default to low_likelihood for famous long-tenured CEOs.
+Be accurate and calibrated. Do NOT use age >= 65 as a standalone trigger — it was removed.
+Do NOT mention age >= 65 as a classification rule in the rationale.
 Return ONLY valid JSON, no extra text.`,
 
     `━━━ COMPANY DATA ━━━
@@ -665,8 +706,10 @@ qc_summary: 2-3 sentence plain English summary of data quality and any concerns`
 async function runPipeline(company, ticker, log) {
   log(p=>[...p,`[${company}] 🔍 Fetching live CEO news...`]);
   const webCtx = await fetchCEONews(company);
+  log(p=>[...p,`[${company}] 💹 Fetching financial data...`]);
+  const finCtx = await fetchFinancialData(company, ticker);
   log(p=>[...p,`[${company}] 📊 Research agent...`]);
-  const data = await agentResearch(company, ticker, webCtx);
+  const data = await agentResearch(company, ticker, webCtx + "\n\nFINANCIAL DATA:\n" + finCtx);
   if(data.incoming_ceo_announced==="yes") log(p=>[...p,`[${company}] ⚡ Incoming CEO: ${data.incoming_ceo_name}`]);
   if(data.ceo_departure_announced==="yes") log(p=>[...p,`[${company}] ⚠ CEO departure announced`]);
   log(p=>[...p,`[${company}] 💰 Finance agent...`]);
@@ -693,8 +736,12 @@ async function runPipeline(company, ticker, log) {
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
-    revenue:finance.revenue, financial_summary:joinCompact(finance.financial_facts," | ",30),
-    tsr_1yr:data.tsr_1yr, tsr_3yr:data.tsr_3yr, tsr_vs_peers:data.tsr_vs_peers,
+    revenue:finance.revenue||data.revenue,
+    financial_summary:Array.isArray(finance.financial_facts)?finance.financial_facts.filter(Boolean).join(" | "):String(finance.financial_facts||""),
+    // TSR: prefer finance agent enrichment over research agent (finance does deeper lookup)
+    tsr_1yr:   (finance.tsr_1yr   &&!finance.tsr_1yr.includes("inferable"))   ? finance.tsr_1yr   : data.tsr_1yr,
+    tsr_3yr:   (finance.tsr_3yr   &&!finance.tsr_3yr.includes("inferable"))   ? finance.tsr_3yr   : data.tsr_3yr,
+    tsr_vs_peers:(finance.tsr_vs_peers&&!finance.tsr_vs_peers.includes("inferable"))? finance.tsr_vs_peers: data.tsr_vs_peers,
     ceo_contract_expiry:data.ceo_contract_expiry, contract_renewed:data.contract_renewed,
     succession_plan_disclosed:data.succession_plan_disclosed, coo_or_president_appointed:data.coo_or_president_appointed,
     board_refreshed_2yr:data.board_refreshed_2yr, activist_investors:data.activist_investors,
@@ -728,8 +775,8 @@ async function runPipeline(company, ticker, log) {
     validation_prediction:validation.prediction_check||"uncertain",
     validation_prediction_note: validation.prediction_note||"",
     validation_company:   validation.company_identity_check||"uncertain",
-    validation_flags:     validation.flags||[],
-    validation_missing:   validation.missing_critical_fields||[],
+    validation_flags:     (validation.flags||[]).map(f=>String(f)),
+    validation_missing:   (validation.missing_critical_fields||[]).map(f=>String(f)),
     qc_score:             validation.data_completeness_score||0,
     qc_summary:           validation.qc_summary||"",,
   };
@@ -811,8 +858,13 @@ function exportToExcel(results) {
   ];
 
   // Build CSV content
+  const flatten = v => {
+    if (Array.isArray(v)) return v.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" | ");
+    if (typeof v === "object" && v !== null) return JSON.stringify(v);
+    return String(v ?? "");
+  };
   const escape = v => {
-    const s = String(v ?? "").replace(/"/g, '""');
+    const s = flatten(v).replace(/"/g, '""');
     return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
   };
 
