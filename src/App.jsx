@@ -1757,98 +1757,93 @@ export default function App(){
         </div>
       </div>
 
-      {/* ── INPUT DRAWER — compact single row ── */}
+      {/* ── INPUT DRAWER ── */}
       {showIn&&(
-        <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:0,padding:"0",height:48}}>
+        <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"stretch"}}>
 
-            {/* Tab switcher */}
-            <div style={{display:"flex",height:"100%",borderRight:`1px solid ${C.border}`,flexShrink:0}}>
-              {[["manual","Manual"],["file","File Upload"]].map(([id,l])=>(
-                <button key={id} onClick={()=>setITab(id)} style={{
-                  padding:"0 16px",border:"none",cursor:"pointer",height:"100%",
-                  fontSize:12,fontWeight:600,background:"transparent",
-                  color:iTab===id?C.red:C.mid,
-                  borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent",
-                  whiteSpace:"nowrap"
-                }}>{l}</button>
-              ))}
+            {/* Left: tabs + textarea/upload */}
+            <div style={{borderRight:`1px solid ${C.border}`}}>
+              {/* Tab row */}
+              <div style={{display:"flex",borderBottom:`1px solid ${C.border}`}}>
+                {[["manual","Manual Entry"],["file","File Upload"]].map(([id,l])=>(
+                  <button key={id} onClick={()=>setITab(id)} style={{
+                    padding:"8px 18px",border:"none",cursor:"pointer",
+                    fontSize:12,fontWeight:600,background:"transparent",
+                    color:iTab===id?C.red:C.mid,
+                    borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent"
+                  }}>{l}</button>
+                ))}
+              </div>
+              {/* Input body */}
+              <div style={{padding:"10px 16px",display:"flex",gap:12,alignItems:"center"}}>
+                {iTab==="manual"?(
+                  <>
+                    <textarea
+                      value={txt}
+                      onChange={e=>setTxt(e.target.value)}
+                      rows={3}
+                      placeholder={"Apple Inc, AAPL
+Microsoft, MSFT
+Babcock International, BAB"}
+                      style={{
+                        flex:1,borderRadius:5,border:`1px solid ${C.border}`,
+                        padding:"8px 12px",fontSize:13,
+                        color:C.ink,background:C.white,
+                        fontFamily:"'DM Sans',monospace",
+                        resize:"none",lineHeight:1.6
+                      }}
+                    />
+                    <div style={{fontSize:12,color:C.mid,lineHeight:2,whiteSpace:"nowrap",flexShrink:0}}>
+                      One per line<br/>Name, TICKER<br/>Max 20
+                    </div>
+                  </>
+                ):(
+                  <>
+                    <div
+                      onClick={()=>fRef.current.click()}
+                      style={{
+                        flex:1,border:`1.5px dashed #FECACA`,borderRadius:6,
+                        padding:"16px",textAlign:"center",cursor:"pointer",background:"#FEF2F2"
+                      }}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
+                      onMouseLeave={e=>e.currentTarget.style.borderColor="#FECACA"}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.red,marginBottom:3}}>Upload CSV or Excel</div>
+                      <div style={{fontSize:12,color:C.mid}}>.csv · .xlsx · .xls · .xlsm</div>
+                      <input ref={fRef} type="file" accept=".csv,.xlsx,.xls,.xlsm" style={{display:"none"}} onChange={handleFile}/>
+                    </div>
+                    {fileCos.length>0&&(
+                      <div style={{fontSize:13,color:C.ok,fontWeight:600,flexShrink:0}}>{fileCos.length} companies loaded</div>
+                    )}
+                  </>
+                )}
+                {err&&<div style={{fontSize:12,color:C.red,flexShrink:0}}>{err}</div>}
+              </div>
             </div>
 
-            {/* Input area */}
-            <div style={{flex:1,padding:"0 14px",display:"flex",alignItems:"center",gap:10,height:"100%",overflow:"hidden"}}>
-              {iTab==="manual"?(
-                <>
-                  <textarea
-                    value={txt}
-                    onChange={e=>setTxt(e.target.value)}
-                    rows={2}
-                    placeholder={"Apple Inc, AAPL\nMicrosoft, MSFT\nBabcock International, BAB"}
-                    style={{
-                      flex:1,border:`1px solid ${C.border}`,borderRadius:4,
-                      padding:"5px 10px",fontSize:12,
-                      color:C.ink,background:C.white,
-                      fontFamily:"'DM Sans',monospace",
-                      resize:"none",lineHeight:1.5,
-                      height:36
-                    }}
-                  />
-                  <span style={{fontSize:11,color:C.mid,whiteSpace:"nowrap",flexShrink:0}}>One per line<br/>Name, TICKER · Max 20</span>
-                </>
-              ):(
-                <>
-                  <div
-                    onClick={()=>fRef.current.click()}
-                    style={{
-                      display:"flex",alignItems:"center",gap:8,
-                      border:`1px dashed #FECACA`,borderRadius:4,
-                      padding:"5px 14px",cursor:"pointer",background:"#FEF2F2",
-                      height:32
-                    }}
-                    onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
-                    onMouseLeave={e=>e.currentTarget.style.borderColor="#FECACA"}>
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3-3 3 3M2 11h10" stroke={C.red} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    <span style={{fontSize:12,fontWeight:600,color:C.red}}>Upload CSV or Excel</span>
-                    <input ref={fRef} type="file" accept=".csv,.xlsx,.xls,.xlsm" style={{display:"none"}} onChange={handleFile}/>
-                  </div>
-                  {fileCos.length>0
-                    ?<span style={{fontSize:12,color:C.ok,fontWeight:600}}>{fileCos.length} companies loaded</span>
-                    :<span style={{fontSize:11,color:C.mid}}>.csv · .xlsx · .xls</span>
-                  }
-                </>
-              )}
-              {err&&<span style={{fontSize:11,color:C.red,flexShrink:0}}>{err}</span>}
-            </div>
-
-            {/* Run + export buttons */}
-            <div style={{display:"flex",alignItems:"center",gap:8,padding:"0 12px",borderLeft:`1px solid ${C.border}`,height:"100%",flexShrink:0}}>
-
+            {/* Right: run button + progress */}
+            <div style={{padding:"12px 16px",display:"flex",flexDirection:"column",justifyContent:"center",gap:8,minWidth:180,background:"#FAFAF8"}}>
               <button
                 onClick={run}
                 disabled={running}
                 style={{
-                  padding:"7px 20px",
+                  padding:"11px 0",width:"100%",
                   background:running?"#E8E5DF":C.red,
                   color:running?C.mid:"#fff",
-                  border:"none",borderRadius:4,
-                  fontSize:13,fontWeight:700,
+                  border:"none",borderRadius:5,
+                  fontSize:14,fontWeight:700,
                   cursor:running?"not-allowed":"pointer",
-                  boxShadow:running?"none":"0 2px 10px rgba(163,0,0,0.25)",
-                  whiteSpace:"nowrap"
+                  boxShadow:running?"none":"0 2px 12px rgba(163,0,0,0.28)"
                 }}>
                 {running?`Running ${prog.d}/${prog.t}…`:"Run Pipeline"}
               </button>
+              {running&&(
+                <div>
+                  <PBar v={prog.d} t={prog.t}/>
+                  <div style={{fontSize:11,color:C.mid,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{logs[logs.length-1]||""}</div>
+                </div>
+              )}
             </div>
-
-
-
-            {/* Progress — shown while running */}
-            {running&&(
-              <div style={{display:"flex",alignItems:"center",gap:10,padding:"0 14px",borderLeft:`1px solid ${C.border}`,minWidth:200,flexShrink:0}}>
-                <div style={{flex:1}}><PBar v={prog.d} t={prog.t}/></div>
-                <div style={{fontSize:11,color:C.mid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{logs[logs.length-1]||""}</div>
-              </div>
-            )}
 
           </div>
         </div>
