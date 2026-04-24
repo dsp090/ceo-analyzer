@@ -274,42 +274,96 @@ Field constraints:
 
   return d;
 }
-// ── Agent 3: Finance ──────────────────────────────────────────────────────────
+// ── Agent 3: Finance (deep dive) ─────────────────────────────────────────────
 async function agentFinance(data) {
-  const fallback={view:"no_clear_influence",financial_facts:data.financial_signals||[],revenue:data.revenue||"not clearly inferable",signals:[],concerns:[]};
-  const raw=await callLLM("You are an equity research expert. Assess financial influence on CEO succession. Return JSON only.",`Data:\n${JSON.stringify(data)}\n\nReturn:\n{"view":"no_clear_influence","financial_facts":[],"revenue":"","signals":[],"concerns":[]}\n\nview=high_influence|medium_influence|weak_influence|no_clear_influence. lists max 3 items 20 words.`);
-  const r=parseJSON(raw,fallback);
-  r.view=cl(r.view||"no_clear_influence",3); r.financial_facts=lst(r.financial_facts,3,20);
-  r.signals=lst(r.signals,3,18); r.concerns=lst(r.concerns,2,18);
-  r.revenue=cl(r.revenue||data.revenue||"not clearly inferable",8)||"not clearly inferable";
+  const fallback={view:"no_clear_influence",financial_facts:[],revenue:data.revenue||"not clearly inferable",signals:[],concerns:[]};
+  const raw = await callLLM(
+    `You are a senior equity research analyst specialising in CEO succession risk. Today is ${new Date().toDateString()}.
+Your job is to do a DEEP financial analysis of this company and CEO, drawing on ALL your knowledge.
+Be specific — cite actual figures, dates, and named events. Return ONLY valid JSON.`,
+
+    `Company: ${data.company||""}  |  Ticker: ${data.ticker||""}  |  Sector: ${data.sector}
+CEO: ${data.ceo_name}  |  Tenure: ${data.ceo_tenure_years} years  |  Ownership: ${data.ownership_category}
+
+Known data from research agent:
+Revenue: ${data.revenue}
+TSR 1yr: ${data.tsr_1yr}  |  TSR 3yr: ${data.tsr_3yr}  |  TSR vs peers: ${data.tsr_vs_peers}
+Financial signals from research: ${JSON.stringify(data.financial_signals)}
+
+━━━ DEEP DIVE TASKS ━━━
+1. REVENUE & GROWTH: What is this company's actual revenue? Revenue growth trend over 2-3 years?
+2. PROFITABILITY: Are margins expanding or contracting? Any profit warnings or earnings misses?
+3. TSR PERFORMANCE: What is the actual TSR 1yr and 3yr? How does it compare to sector peers?
+4. BALANCE SHEET: Any leverage concerns, debt rating changes, or liquidity issues?
+5. ANALYST SENTIMENT: Any recent analyst downgrades, price target cuts, or sell ratings?
+6. SHAREHOLDER RETURNS: Dividend cuts, buyback suspensions, or capital allocation concerns?
+7. CEO ACCOUNTABILITY: Is the CEO directly blamed by investors or analysts for underperformance?
+
+Return this JSON:
+{
+  "view": "",
+  "revenue": "",
+  "tsr_1yr": "",
+  "tsr_3yr": "",
+  "tsr_vs_peers": "",
+  "financial_facts": [],
+  "signals": [],
+  "concerns": []
+}
+
+view: high_influence | medium_influence | weak_influence | no_clear_influence
+  • high_influence: sustained TSR underperformance, major earnings misses, CEO blamed for financial failures
+  • medium_influence: moderate underperformance, mixed results, some analyst concern
+  • weak_influence: one-off miss, generally solid performance
+  • no_clear_influence: strong financial performance, no pressure
+
+financial_facts: up to 4 items — SPECIFIC figures e.g. "Revenue $28bn FY2024, up 4% YoY", "TSR -12% vs sector median +8% over 3 years"
+signals: up to 3 SPECIFIC financial pressure signals with actual numbers
+concerns: up to 2 concrete financial risks that could accelerate CEO change
+revenue: format as $XXbn or $XXXm — use actual figure if known
+tsr_1yr / tsr_3yr: use actual % if known
+tsr_vs_peers: "above median", "below median", or specific figure
+⚠ Every item must be factual and specific. No generic observations.`
+  );
+  const r = parseJSON(raw, fallback);
+  r.view = cl(r.view||"no_clear_influence", 3);
+  r.financial_facts = lst(r.financial_facts, 4, 25);
+  r.signals = lst(r.signals, 3, 25);
+  r.concerns = lst(r.concerns, 2, 25);
+  r.revenue = cl(r.revenue||data.revenue||"not clearly inferable", 10)||"not clearly inferable";
+  r.tsr_1yr = cl(r.tsr_1yr||data.tsr_1yr||"not clearly inferable", 8)||data.tsr_1yr||"not clearly inferable";
+  r.tsr_3yr = cl(r.tsr_3yr||data.tsr_3yr||"not clearly inferable", 8)||data.tsr_3yr||"not clearly inferable";
+  r.tsr_vs_peers = cl(r.tsr_vs_peers||data.tsr_vs_peers||"not clearly inferable", 10)||data.tsr_vs_peers||"not clearly inferable";
   return r;
 }
 
-// ── Agent 4: Press & Activism ────────────────────────────────────────────────
+// ── Agent 4: Press & Activism (deep dive) ───────────────────────────────────
 async function agentPress(data) {
   const fallback = {
     view:"no_clear_influence", signals:[], concerns:[],
-    controversies:(data.press_activism_signals||[]).slice(0,3),
-    investor_activism:data.investor_activism||"not clearly inferable"
+    controversies:[], investor_activism:"None identified"
   };
 
   const raw = await callLLM(
-    `You are a governance and investor relations expert specialising in CEO succession risk.
-Analyse the specific data provided and identify REAL, NAMED signals — not generic observations.
+    `You are a senior governance analyst and investor relations expert. Today is ${new Date().toDateString()}.
+Do a DEEP DIVE on external pressure signals for this company and CEO.
+Draw on your full knowledge of activist campaigns, proxy battles, shareholder letters, and press coverage.
 Return ONLY valid JSON.`,
 
-    `━━━ COMPANY DATA ━━━
-Company: ${data.company||""}  |  Sector: ${data.sector}  |  CEO: ${data.ceo_name}
-CEO tenure: ${data.ceo_tenure_years} years  |  Ownership: ${data.ownership_category}
+    `Company: ${data.company||""}  |  Ticker: ${data.ticker||""}  |  Sector: ${data.sector}
+CEO: ${data.ceo_name}  |  Tenure: ${data.ceo_tenure_years} years
 TSR 1yr: ${data.tsr_1yr}  |  TSR vs peers: ${data.tsr_vs_peers}
-Activist investors: ${data.activist_investors}
-Press/activism signals from research: ${JSON.stringify(data.press_activism_signals)}
-Investor activism detail: ${data.investor_activism}
-Mandate signals: ${data.mandate_signals}
-Contract expiry: ${data.ceo_contract_expiry}  |  Renewed: ${data.contract_renewed}
+Known activist data: ${data.activist_investors}
+Known press signals: ${JSON.stringify(data.press_activism_signals)}
 
-━━━ TASK ━━━
-Based on the data above, assess external pressure on CEO succession.
+━━━ DEEP DIVE TASKS ━━━
+1. ACTIVIST INVESTORS: Are there any known activist hedge funds or shareholders (e.g. Elliott, ValueAct, Cevian, Third Point, Starboard) with a stake in this company? What is their stated position?
+2. SHAREHOLDER LETTERS: Have any major shareholders or proxy advisors (ISS, Glass Lewis) published letters criticising the CEO or board?
+3. GOVERNANCE CONTROVERSIES: Any CEO pay disputes, board independence concerns, related-party transactions, or AGM protests?
+4. LEGAL & REGULATORY: Any active regulatory investigations, lawsuits, or government probes involving the CEO?
+5. MEDIA PRESSURE: Any major investigative journalism pieces, whistleblower claims, or sustained negative press about the CEO specifically?
+6. ESG PRESSURE: Any major ESG controversies — environmental incidents, labour disputes, human rights issues — that could create board pressure?
+7. PROXY BATTLES: Any history of or current proxy contests at this company?
 
 Return this JSON:
 {
@@ -320,41 +374,36 @@ Return this JSON:
   "investor_activism": ""
 }
 
-━━━ RULES ━━━
 view: high_influence | medium_influence | weak_influence | no_clear_influence
-  • high_influence: named activist campaign, public shareholder letter demanding CEO change, major scandal/investigation, formal vote of no-confidence
-  • medium_influence: TSR underperformance vs peers, compensation controversy, governance criticism from proxy advisors
-  • weak_influence: minor governance concerns, one-off press criticism
-  • no_clear_influence: no notable external pressure
+  • high_influence: active named activist with CEO change demand, regulatory probe, proxy battle, major scandal
+  • medium_influence: proxy advisor criticism, compensation controversy, governance concerns from named investor
+  • weak_influence: one-off press criticism, minor governance question
+  • no_clear_influence: no notable external pressure found
 
-signals: up to 3 items — SPECIFIC facts only (e.g. "Elliott Management disclosed 5% stake in 2024", "ISS recommended against CEO pay package")
-  DO NOT write generic phrases like "governance scrutiny typical for mega-cap" or "no credible report"
-  If no real signals exist, return an empty array []
+signals: up to 4 items — SPECIFIC and NAMED e.g. "Elliott Management disclosed 8.5% stake Nov 2023 demanding strategic review", "ISS recommended against CEO pay package at 2024 AGM"
+concerns: up to 3 concrete external pressure risks
+controversies: up to 4 named events — lawsuits, regulatory probes, activist letters, public disputes
+investor_activism: full summary of any named activist position and demands, or "None identified"
 
-concerns: up to 2 items — actual identified risks with specifics
-controversies: up to 3 items — named events, lawsuits, activist letters, regulatory probes
-investor_activism: summarise any named activist investors and their stated position, or "None identified"
-
-⚠ Quality rule: Every item must reference a SPECIFIC event, person, or named entity. Generic observations are not allowed.`
+⚠ CRITICAL: Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`
   );
 
   const r = parseJSON(raw, fallback);
-  r.view             = cl(r.view||"no_clear_influence", 3);
-  r.signals          = lst(r.signals, 3, 20);
-  r.concerns         = lst(r.concerns, 2, 20);
-  r.controversies    = lst(r.controversies, 3, 20);
-  r.investor_activism = cl(r.investor_activism||"not clearly inferable", 15)||"not clearly inferable";
+  r.view = cl(r.view||"no_clear_influence", 3);
+  r.signals = lst(r.signals, 4, 25);
+  r.concerns = lst(r.concerns, 3, 25);
+  r.controversies = lst(r.controversies, 4, 25);
+  r.investor_activism = cl(r.investor_activism||"None identified", 20)||"None identified";
 
-  // Filter out generic boilerplate phrases
-  const genericPhrases = ["typical for","no credible","no major","not identified","no report","governance scrutiny"];
-  const isGeneric = s => genericPhrases.some(p => s.toLowerCase().includes(p));
-  r.signals       = r.signals.filter(s => !isGeneric(s));
-  r.concerns      = r.concerns.filter(s => !isGeneric(s));
+  // Strip boilerplate
+  const generic = ["typical for","no credible","no major","not identified","no report","governance scrutiny","generally","standard"];
+  const isGeneric = s => generic.some(p => s.toLowerCase().includes(p));
+  r.signals = r.signals.filter(s => !isGeneric(s));
+  r.concerns = r.concerns.filter(s => !isGeneric(s));
   r.controversies = r.controversies.filter(s => !isGeneric(s));
 
   return r;
 }
-
 // ── Agent 5: Industry ─────────────────────────────────────────────────────────
 async function agentIndustry(data) {
   const fallback = { view:"no_clear_influence", signals:data.industry_signals||[], concerns:[] };
@@ -390,12 +439,20 @@ async function agentPrediction(data, finance, press, industry) {
   // ── HARD CODE OVERRIDES — no LLM needed, answer is deterministic ─────────
   const isFamily = ["founder_ceo","family_ceo","founder_family_control_non_ceo"].includes(data.ownership_category);
 
-  // Rule 1: Family/founder CEO with no announced departure → always Low
-  if (isFamily && data.ceo_departure_announced !== "yes" && data.incoming_ceo_announced !== "yes") {
+  // Rule 1: Family/founder CEO → ALWAYS Low unless there is solid hard proof of change
+  // Solid proof means: formal departure announcement OR confirmed incoming CEO
+  // Activist investors, press signals, TSR underperformance — none of these override the family rule
+  // Only a publicly confirmed departure or named successor can change this
+  const solidProofOfChange = (
+    data.ceo_departure_announced === "yes" ||
+    data.incoming_ceo_announced === "yes"
+  );
+
+  if (isFamily && !solidProofOfChange) {
     return {
       prediction: "low_likelihood",
       confidence: "high",
-      analytical_rationale: `${data.ceo_name} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-led businesses have internally managed, planned succession processes with minimal external departure pressure. No departure has been announced. Succession risk is structurally low regardless of tenure or age.`
+      analytical_rationale: `${data.ceo_name} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance. Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
     };
   }
 
@@ -488,29 +545,27 @@ Return this JSON:
 {"prediction":"","confidence":"","analytical_rationale":"","investor_impact":"High negative|Moderate negative|Neutral|Positive"}
 
 ━━━ CLASSIFICATION RULES (apply in order, stop at first match) ━━━
-1. age >= 65                                     → high_likelihood
-2. age >= 63 AND tenure >= 8                     → high_likelihood
-3. tenure >= 12                                  → high_likelihood
-4. TWO OR MORE of these signals present:
-   • activist investor present
-   • TSR underperformance vs peers
-   • tenure >= 8 years
-   • contract expires within 12 months
-   • age >= 60
+1. age >= 63 AND tenure >= 8                     → high_likelihood
+2. TWO OR MORE of these signals present:
+   • activist investor present with named demands
+   • TSR significantly below sector peers
+   • tenure >= 8 years AND signals of board restlessness
+   • contract expires within 12 months with no renewal indication
+   • age >= 60 AND multiple other signals
    • major scandal or regulatory probe
-   • COO/President appointed as clear heir
-   • board recently refreshed
+   • COO/President appointed as clear named heir apparent
+   • board recently refreshed suggesting change agenda
+   • mandate signals indicating limited remaining term
                                                  → high_likelihood
-5. ONE of these signals:
-   • tenure 5–8 years
-   • mild underperformance
+3. ONE of these signals:
+   • tenure 5–8 years with some underperformance
+   • mild TSR underperformance vs peers
    • contract expiry in 1–2 years
-   • age 58–62
-   • COO appointed (not clear heir)
+   • age 58–62 with no strong retention signals
+   • COO appointed but not clearly heir
                                                  → medium_likelihood
-6. All of these true: tenure < 5yr AND age < 58 AND strong performance AND contract recently renewed AND no activist
-                                                 → low_likelihood
-7. Default if unclear                            → medium_likelihood
+4. low_likelihood if: tenure < 5yr AND no activist AND contract recently renewed AND performance solid
+5. Default if data is sparse                     → medium_likelihood
 
 confidence: "high" if prediction is clear-cut, "medium" if borderline, "low" if data is sparse
 analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, tenure, TSR values, signals). Never write generic boilerplate.`
@@ -523,6 +578,89 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
   r.investor_impact      = cl(r.investor_impact||"", 8);
   return r;
 }
+// ── Agent 7: Validation & QC ─────────────────────────────────────────────────
+async function agentValidation(company, ticker, data, finance, press, pred) {
+  const fallback = {
+    ceo_name_verified: "unverified",
+    tenure_verified: "unverified",
+    tsr_verified: "unverified",
+    revenue_verified: "unverified",
+    activist_verified: "unverified",
+    prediction_rationale_check: "unverified",
+    data_completeness_score: 0,
+    flags: [],
+    qc_summary: "Validation could not be completed."
+  };
+
+  const raw = await callLLM(
+    `You are a quality control analyst reviewing AI-generated CEO succession research. Today is ${new Date().toDateString()}.
+Your job is to VERIFY each key data point and flag anything that looks wrong, implausible, or missing.
+Be critical. Do not just accept what the research says — cross-check with your own knowledge.
+Return ONLY valid JSON.`,
+
+    `Company: ${company}  |  Ticker: ${ticker||""}
+
+━━━ DATA TO VERIFY ━━━
+CEO Name: ${data.ceo_name}
+CEO Age: ${data.ceo_age}
+CEO Start Date: ${data.ceo_start_date}
+CEO Tenure: ${data.ceo_tenure_years} years
+Ownership: ${data.ownership_category}
+Revenue: ${data.revenue}
+TSR 1yr: ${data.tsr_1yr}  |  TSR 3yr: ${data.tsr_3yr}  |  TSR vs peers: ${data.tsr_vs_peers}
+Activist investors: ${data.activist_investors}
+Departure announced: ${data.ceo_departure_announced}
+Incoming CEO: ${data.incoming_ceo_name}
+Finance view: ${finance.view}
+Press view: ${press.view}
+Prediction: ${pred.prediction}  |  Confidence: ${pred.confidence}
+
+━━━ VERIFICATION TASKS ━━━
+1. CEO NAME: Is ${data.ceo_name} actually the current CEO of ${company}? Did the CEO change recently?
+2. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}? Is this plausible?
+3. TSR: Are the TSR figures (${data.tsr_1yr}, ${data.tsr_3yr}) plausible for ${company} in the current period?
+4. REVENUE: Is ${data.revenue} a plausible revenue figure for ${company}?
+5. ACTIVIST: Is the activist investor data (${data.activist_investors}) accurate to your knowledge?
+6. PREDICTION: Given everything you know about ${company}, does the prediction of ${pred.prediction} seem reasonable?
+7. MISSING DATA: Which important fields are blank or "not clearly inferable" that should have data?
+8. COMPANY IDENTITY: Is this actually ${company} or could the model have confused it with another company?
+
+Return this JSON:
+{
+  "ceo_name_verified": "correct|incorrect|uncertain",
+  "ceo_name_note": "",
+  "tenure_verified": "correct|incorrect|uncertain",
+  "tenure_note": "",
+  "tsr_verified": "correct|plausible|incorrect|uncertain",
+  "tsr_note": "",
+  "revenue_verified": "correct|plausible|incorrect|uncertain",
+  "revenue_note": "",
+  "activist_verified": "correct|incorrect|uncertain",
+  "activist_note": "",
+  "prediction_check": "reasonable|too_high|too_low|uncertain",
+  "prediction_note": "",
+  "company_identity_check": "correct|confused|uncertain",
+  "identity_note": "",
+  "missing_critical_fields": [],
+  "flags": [],
+  "data_completeness_score": 0,
+  "qc_summary": ""
+}
+
+missing_critical_fields: list fields that returned "not clearly inferable" but should be available
+flags: list any specific concerns e.g. "CEO name appears to be from a different company", "TSR figures seem inconsistent"
+data_completeness_score: 0-100, how complete is the data overall
+qc_summary: 2-3 sentence plain English summary of data quality and any concerns`
+  );
+
+  const r = parseJSON(raw, fallback);
+  r.flags = lst(r.flags, 5, 30);
+  r.missing_critical_fields = lst(r.missing_critical_fields, 8, 15);
+  r.qc_summary = cl(r.qc_summary||"", 60);
+  r.data_completeness_score = parseInt(r.data_completeness_score)||0;
+  return r;
+}
+
 // ── Full pipeline ─────────────────────────────────────────────────────────────
 async function runPipeline(company, ticker, log) {
   log(p=>[...p,`[${company}] 🔍 Fetching live CEO news...`]);
@@ -539,7 +677,13 @@ async function runPipeline(company, ticker, log) {
   const industry = await agentIndustry(data);
   log(p=>[...p,`[${company}] 🎯 Prediction agent...`]);
   const pred = await agentPrediction(data, finance, press, industry);
-  log(p=>[...p,`[${company}] ✓ Complete`]);
+  log(p=>[...p,`[${company}] ✅ Validating & QC checking...`]);
+  const validation = await agentValidation(company, ticker, data, finance, press, pred);
+  // Apply validation corrections — if validator flags CEO as wrong, note it
+  if (validation.ceo_name_verified === "incorrect") {
+    data.ceo_name = data.ceo_name + " ⚠";
+  }
+  log(p=>[...p,`[${company}] ✓ Complete (QC score: ${validation.data_completeness_score}%)`]);
   return {
     company:cl(company,8), ticker:cl(ticker||"",6),
     sector:data.sector, ceo_name:data.ceo_name, ceo_age:data.ceo_age,
@@ -575,6 +719,19 @@ async function runPipeline(company, ticker, log) {
     coo_or_president_appointed:data.coo_or_president_appointed||"",
     board_refreshed_2yr:data.board_refreshed_2yr||"",
     investor_impact:pred.investor_impact||"",
+    // Validation & QC
+    validation_ceo:       validation.ceo_name_verified||"unverified",
+    validation_ceo_note:  validation.ceo_name_note||"",
+    validation_tsr:       validation.tsr_verified||"unverified",
+    validation_tsr_note:  validation.tsr_note||"",
+    validation_revenue:   validation.revenue_verified||"unverified",
+    validation_prediction:validation.prediction_check||"uncertain",
+    validation_prediction_note: validation.prediction_note||"",
+    validation_company:   validation.company_identity_check||"uncertain",
+    validation_flags:     validation.flags||[],
+    validation_missing:   validation.missing_critical_fields||[],
+    qc_score:             validation.data_completeness_score||0,
+    qc_summary:           validation.qc_summary||"",,
   };
 }
 
@@ -638,6 +795,19 @@ function exportToExcel(results) {
     { key:"finance_concerns",     label:"Finance Concerns",    fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"press_concerns",       label:"Press Concerns",      fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"industry_concerns",    label:"Industry Concerns",   fmt: v => Array.isArray(v)?v.join(" | "):v },
+    // QC & Validation
+    { key:"qc_score",              label:"QC Completeness Score"                },
+    { key:"qc_summary",            label:"QC Summary"                           },
+    { key:"validation_ceo",        label:"CEO Name Verified"                    },
+    { key:"validation_ceo_note",   label:"CEO Verification Note"                },
+    { key:"validation_tsr",        label:"TSR Verified"                         },
+    { key:"validation_tsr_note",   label:"TSR Note"                             },
+    { key:"validation_revenue",    label:"Revenue Verified"                     },
+    { key:"validation_prediction", label:"Prediction QC"                        },
+    { key:"validation_prediction_note", label:"Prediction QC Note"              },
+    { key:"validation_company",    label:"Company Identity Check"               },
+    { key:"validation_flags",      label:"QC Flags",  fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"validation_missing",    label:"Missing Fields", fmt: v => Array.isArray(v)?v.join(", "):v },
   ];
 
   // Build CSV content
@@ -723,7 +893,7 @@ function Detail({r}){
   const [tab,setTab]=useState("overview");
   const isHigh=isHighPred(r.prediction);
   const hdrBg=isHigh?`linear-gradient(135deg,${C.redD},${C.red})`:`linear-gradient(135deg,${C.ink2},${C.ink3})`;
-  const TABS=[{id:"overview",l:"Overview"},{id:"agents",l:"Agent Views"},{id:"ceo",l:"CEO Profile"},{id:"governance",l:"Governance"},{id:"financials",l:"Financials"},{id:"rationale",l:"Rationale"}];
+  const TABS=[{id:"overview",l:"Overview"},{id:"agents",l:"Agent Views"},{id:"ceo",l:"CEO Profile"},{id:"governance",l:"Governance"},{id:"financials",l:"Financials"},{id:"rationale",l:"Rationale"},{id:"qc",l:"QC"}];
 
   return(
     <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1006,6 +1176,55 @@ function Detail({r}){
               <AgentView label="Press" view={r.press_view} signals={r.press_signals||[]} concerns={r.press_concerns||[]}/>
               <AgentView label="Industry" view={r.industry_view} signals={r.industry_signals||[]} concerns={r.industry_concerns||[]}/>
             </div>
+          </div>
+        )}
+
+        {tab==="qc"&&(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+              <div style={{background:r.qc_score>=80?"#E8F5EE":r.qc_score>=50?"#FFF3DC":"#FFE8E8",border:`1px solid ${r.qc_score>=80?"#1A7A3C":r.qc_score>=50?"#B56E00":"#CC0000"}`,borderRadius:8,padding:"12px",textAlign:"center"}}>
+                <div style={{fontSize:9,color:"#888",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:4}}>Data Completeness Score</div>
+                <div style={{fontSize:28,fontWeight:900,color:r.qc_score>=80?"#1A7A3C":r.qc_score>=50?"#B56E00":"#CC0000"}}>{r.qc_score||0}%</div>
+              </div>
+              <div style={{background:"#F5F5FA",border:"1px solid #E0E0EE",borderRadius:8,padding:"12px"}}>
+                <div style={{fontSize:9,color:"#888",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:4}}>QC Summary</div>
+                <div style={{fontSize:11,color:"#1C1C2E",lineHeight:1.5}}>{r.qc_summary||"No QC summary available."}</div>
+              </div>
+              <div style={{background:"#F5F5FA",border:"1px solid #E0E0EE",borderRadius:8,padding:"12px"}}>
+                <div style={{fontSize:9,color:"#888",textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:4}}>Company Identity Check</div>
+                <div style={{fontSize:13,fontWeight:700,color:r.validation_company==="correct"?"#1A7A3C":r.validation_company==="confused"?"#CC0000":"#B56E00"}}>{r.validation_company||"—"}</div>
+                {r.validation_flags?.map((f,i)=><div key={i} style={{fontSize:10,color:"#CC0000",marginTop:4}}>⚠ {f}</div>)}
+              </div>
+            </div>
+            <div style={{background:"#fff",border:"1px solid #E0E0EE",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+              <SH>Field Verification</SH>
+              {[
+                ["CEO Name",r.ceo_name,r.validation_ceo,r.validation_ceo_note],
+                ["TSR Figures",`${r.tsr_1yr} / ${r.tsr_3yr}`,r.validation_tsr,r.validation_tsr_note],
+                ["Revenue",r.revenue,r.validation_revenue,""],
+                ["Prediction",r.prediction,r.validation_prediction,r.validation_prediction_note],
+              ].map(([label,value,status,note],i)=>{
+                const sc=status==="correct"||status==="plausible"||status==="reasonable"?"#1A7A3C":status==="incorrect"||status==="too_high"||status==="too_low"||status==="confused"?"#CC0000":"#B56E00";
+                const sbg=status==="correct"||status==="plausible"||status==="reasonable"?"#E8F5EE":status==="incorrect"||status==="too_high"||status==="too_low"||status==="confused"?"#FFE8E8":"#FFF3DC";
+                return (
+                  <div key={i} style={{display:"grid",gridTemplateColumns:"130px 1fr 110px",gap:8,padding:"8px 0",borderBottom:"1px solid #F0F0F8",alignItems:"start"}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#444"}}>{label}</div>
+                    <div><div style={{fontSize:11,color:"#1C1C2E"}}>{value||"—"}</div>{note&&<div style={{fontSize:10,color:"#888",marginTop:2}}>{note}</div>}</div>
+                    <div style={{background:sbg,borderRadius:4,padding:"3px 8px",fontSize:10,fontWeight:700,color:sc,textAlign:"center"}}>{status||"—"}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {r.validation_missing?.length>0&&(
+              <div style={{background:"#FFF8ED",border:"1px solid #F0D080",borderRadius:9,padding:"12px 14px"}}>
+                <SH>Missing Critical Fields</SH>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {r.validation_missing.map((f,i)=>(
+                    <span key={i} style={{background:"#FFF3DC",border:"1px solid #B56E00",borderRadius:4,padding:"3px 8px",fontSize:10,color:"#B56E00",fontWeight:600}}>{f}</span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
