@@ -1599,7 +1599,7 @@ export default function App(){
   const [logs,setLogs]=useState([]);
   const [err,setErr]=useState("");
   const [sel,setSel]=useState(null);
-  const [showIn,setShowIn]=useState(true);
+  const [showIn,setShowIn]=useState(true); // collapses after first run
   const fRef=useRef();
 
   useEffect(()=>{ injectGlobalStyle(); },[]);
@@ -1681,25 +1681,35 @@ export default function App(){
             </div>
           </div>
 
-          <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-            {[
-              ["Web Search","Live CEO news"],
-              ["Research","Full profile"],
-              ["Finance","TSR & revenue"],
-              ["Press","Activism"],
-              ["Industry","Sector"],
-              ["Prediction","Board verdict"],
-              ["Challenge","Devil's advocate"],
-              ["Validation","QC check"]
-            ].map(([l,s])=>(
-              <div key={l} style={{fontSize:11,color:"rgba(255,255,255,0.6)",lineHeight:1.4,textAlign:"center"}}>
-                <div style={{fontWeight:700,color:"rgba(255,255,255,0.95)",fontSize:11,marginBottom:1}}>{l}</div>
-                {s}
-              </div>
+          <div style={{display:"flex",gap:6,flexWrap:"nowrap"}}>
+            {["Web Search","Research","Finance","Press","Industry","Prediction","Challenge","Validation"].map((l,i)=>(
+              <div key={l} style={{
+                fontSize:10,fontWeight:600,
+                color:"rgba(255,255,255,0.75)",
+                background:"rgba(255,255,255,0.1)",
+                borderRadius:3,padding:"3px 8px",
+                whiteSpace:"nowrap"
+              }}>{i+1}. {l}</div>
             ))}
           </div>
 
-          {results.length>0&&(
+          <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+            {results.length>0&&!running&&(
+              <div style={{display:"flex",gap:16,alignItems:"center",background:"rgba(0,0,0,0.15)",borderRadius:6,padding:"5px 14px"}}>
+                {[
+                  {l:"Total",v:results.length,c:"rgba(255,255,255,0.9)"},
+                  {l:"New/Transition",v:(pc.new_ceo_appointed||0)+(pc.transition_underway||0),c:"#FFB3B3"},
+                  {l:"High",v:pc.high_likelihood||0,c:"#FFB3B3"},
+                  {l:"Medium",v:pc.medium_likelihood||0,c:"#FFD580"},
+                  {l:"Low",v:pc.low_likelihood||0,c:"#86EFAC"}
+                ].map(({l,v,c})=>(
+                  <div key={l} style={{textAlign:"center"}}>
+                    <div style={{fontSize:17,fontWeight:800,color:c,lineHeight:1}}>{v}</div>
+                    <div style={{fontSize:9,color:"rgba(255,255,255,0.55)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.07em",marginTop:2}}>{l}</div>
+                  </div>
+                ))}
+              </div>
+            )}
             <button onClick={()=>setShowIn(x=>!x)} style={{
               background:"rgba(255,255,255,0.15)",
               border:"1px solid rgba(255,255,255,0.25)",
@@ -1709,7 +1719,14 @@ export default function App(){
             }}>
               {showIn?"Hide Input":"New Analysis"}
             </button>
-          )}
+            {results.length>0&&!running&&(
+              <button onClick={()=>exportToExcel(results)} style={{
+                background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",
+                color:"#fff",borderRadius:5,padding:"6px 12px",
+                fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"
+              }}>↓ Export</button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1778,13 +1795,7 @@ export default function App(){
 
             {/* Run + export buttons */}
             <div style={{display:"flex",alignItems:"center",gap:8,padding:"0 12px",borderLeft:`1px solid ${C.border}`,height:"100%",flexShrink:0}}>
-              {results.length>0&&!running&&(
-                <button onClick={()=>exportToExcel(results)} style={{
-                  padding:"6px 14px",background:C.white,color:C.ok,
-                  border:`1px solid ${C.ok}`,borderRadius:4,
-                  fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"
-                }}>Export CSV</button>
-              )}
+
               <button
                 onClick={run}
                 disabled={running}
@@ -1802,22 +1813,7 @@ export default function App(){
               </button>
             </div>
 
-            {/* Stats — shown inline after run */}
-            {results.length>0&&!running&&(
-              <div style={{display:"flex",gap:12,padding:"0 14px",borderLeft:`1px solid ${C.border}`,height:"100%",alignItems:"center",flexShrink:0}}>
-                {[
-                  {l:"Total",v:results.length,c:C.ink},
-                  {l:"High",v:(pc.new_ceo_appointed||0)+(pc.transition_underway||0)+(pc.high_likelihood||0),c:C.red},
-                  {l:"Medium",v:pc.medium_likelihood||0,c:C.warn},
-                  {l:"Low",v:pc.low_likelihood||0,c:C.ok}
-                ].map(({l,v,c})=>(
-                  <div key={l} style={{textAlign:"center"}}>
-                    <div style={{fontSize:16,fontWeight:800,color:c,lineHeight:1}}>{v}</div>
-                    <div style={{fontSize:9,color:C.mid,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginTop:2}}>{l}</div>
-                  </div>
-                ))}
-              </div>
-            )}
+
 
             {/* Progress — shown while running */}
             {running&&(
