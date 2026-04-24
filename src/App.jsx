@@ -629,6 +629,7 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
 }
 // ── Agent 7: Validation & QC ─────────────────────────────────────────────────
 async function agentValidation(company, ticker, data, finance, press, pred) {
+  const today = new Date().toDateString();
   const fallback = {
     ceo_name_verified: "unverified",
     tenure_verified: "unverified",
