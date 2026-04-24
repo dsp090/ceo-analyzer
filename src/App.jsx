@@ -1783,9 +1783,7 @@ export default function App(){
                       value={txt}
                       onChange={e=>setTxt(e.target.value)}
                       rows={3}
-                      placeholder={"Apple Inc, AAPL
-Microsoft, MSFT
-Babcock International, BAB"}
+                      placeholder={"Apple Inc, AAPL\nMicrosoft, MSFT\nBabcock International, BAB"}
                       style={{
                         flex:1,borderRadius:5,border:`1px solid ${C.border}`,
                         padding:"8px 12px",fontSize:13,
