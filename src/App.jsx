@@ -130,17 +130,27 @@ If a CEO changed in ${yr} or ${yr-1}, that is the correct answer — not the pre
 
   const prompt = `Company: "${company}"
 
-Answer these questions using your most up-to-date knowledge:
+Answer ALL questions using your most up-to-date training knowledge:
 
-Q1. CURRENT CEO: Who is the CEO of "${company}" right now? Full first and last name.
-Q2. RECENT CHANGE: Has the CEO changed in ${yr} or ${yr-1}? Yes/No. If yes: old CEO name, new CEO name, when.
-Q3. DEPARTURE: Has any CEO formally announced stepping down or retiring? Yes/No. If yes: name + date.
-Q4. SUCCESSOR: Has a named person been confirmed as next CEO? Yes/No. If yes: full name, background, start date.
+Q1. CURRENT CEO: Who is the CEO of "${company}" right now? Full first and last name + start date.
 
-Think carefully:
-- Apple Inc: Has Tim Cook stepped down? Is John Ternus now CEO?
-- For any company: what is the LATEST CEO you know about?
-- Give the most recent information you have, even if it was very recent.`;
+Q2. SUCCESSOR ANNOUNCED: Has "${company}" publicly named a SPECIFIC PERSON as the NEXT/INCOMING CEO?
+    This could be phrased as: "will succeed", "appointed as next CEO", "named as successor", "to take over as CEO"
+    Yes/No. If yes: their FULL NAME, their current role, their confirmed start date.
+
+Q3. CEO CHANGE IN ${yr} or ${yr-1}: Has there been an actual CEO change? Old name + new name + date.
+
+Q4. DEPARTURE ANNOUNCED: Has the current CEO formally said they are leaving/retiring/stepping down?
+    Yes/No. If yes: name, announcement date, effective date.
+
+Q5. TRANSITION STATUS: Is a CEO transition currently underway or formally planned?
+
+Examples of what to look for:
+- Any announcement: "X will succeed Y as CEO", "X named as next CEO", "X appointed incoming CEO"
+- Any press release, board announcement, or regulatory filing confirming a named successor
+- Any transition plan where a specific person is confirmed to take over
+
+ALWAYS check for successor announcements — this is the most important question.`;
 
   // Always make both calls — plugin may or may not fire, model knowledge always works
   const results = [];
@@ -187,7 +197,7 @@ CRITICAL RULES — READ BEFORE FILLING JSON:
 3. If a named successor is mentioned in the context — set incoming_ceo_announced="yes" and fill incoming_ceo_name with their FULL NAME.
 4. If the old CEO stepped down — set ceo_departure_announced="yes".
 5. Do NOT default to a long-tenured CEO if the context confirms they have been replaced.
-6. For Apple Inc: If Tim Cook is no longer CEO and John Ternus (or anyone) is named — reflect that in the JSON.
+6. If the news context confirms the CEO has changed, update ceo_name to the NEW CEO.
 7. Use training knowledge for TSR, revenue, CEO age — do not return "not clearly inferable" for major public companies.
 
 Return ONLY valid JSON. No markdown.`,
@@ -200,8 +210,20 @@ ${webCtx}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 READ THE ABOVE CAREFULLY BEFORE FILLING THE JSON.
-If the context contains Q4 answer with a name → that name MUST go in incoming_ceo_name.
-If the context says "transition underway" or "mid-transition" → set both flags to "yes".
+
+SUCCESSOR DETECTION — HIGHEST PRIORITY:
+- If the context mentions ANY person being named, appointed, or confirmed as the NEXT/INCOMING/FUTURE CEO → 
+  MUST set incoming_ceo_announced="yes" and put their FULL NAME in incoming_ceo_name
+- Look for phrases like: "will succeed", "named as next CEO", "to replace", "appointed as incoming CEO", "succession plan names"
+- If ANY person is named as next/incoming/future CEO in the context → put their full name in incoming_ceo_name
+- Do NOT leave incoming_ceo_name as "N/A" if ANY name appears as a successor in the context
+
+DEPARTURE DETECTION:
+- If context says CEO is stepping down, retiring, leaving, or not seeking re-election → ceo_departure_announced="yes"
+
+CURRENT CEO:
+- Keep current CEO in ceo_name until their successor has actually STARTED
+- If successor is only announced but not yet started → keep old CEO in ceo_name, set incoming fields
 
 MAPPING RULES — extract from the news context above:
 
@@ -646,21 +668,29 @@ Prediction: ${pred.prediction}  |  Confidence: ${pred.confidence}
 
 ━━━ VERIFICATION TASKS ━━━
 1. CEO NAME: Is "${data.ceo_name}" actually the current CEO of ${company} as of ${today}?
-   - For Apple: Has Tim Cook stepped down? Is John Ternus or someone else now CEO?
-   - For any company: Cross-check against your most recent knowledge of CEO changes in ${new Date().getFullYear()}.
-   - If the name looks like an old/previous CEO, flag it as "incorrect".
-2. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}? Is this plausible?
-3. TSR: Are the TSR figures (${data.tsr_1yr}, ${data.tsr_3yr}) plausible for ${company} in the current period?
-4. REVENUE: Is ${data.revenue} a plausible revenue figure for ${company}?
-5. ACTIVIST: Is the activist investor data (${data.activist_investors}) accurate to your knowledge?
-6. PREDICTION: Given everything you know about ${company}, does the prediction of ${pred.prediction} seem reasonable?
-7. MISSING DATA: Which important fields are blank or "not clearly inferable" that should have data?
-8. COMPANY IDENTITY: Is this actually ${company} or could the model have confused it with another company?
+   - Cross-check against your most recent knowledge of CEO changes.
+   - If a new CEO has already started, flag the old name as "incorrect".
+
+2. SUCCESSOR CHECK (CRITICAL): Has ${company} publicly announced a named successor/incoming CEO?
+   - Search your full knowledge for any named successor announcement for this specific company.
+   - Look for: board announcements, press releases, regulatory filings, news articles naming a specific person.
+   - If a named successor exists and incoming_ceo_name is "N/A", flag it and provide the correct name.
+3. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}? Is this plausible?
+4. TSR: Are the TSR figures (${data.tsr_1yr}, ${data.tsr_3yr}) plausible for ${company} in the current period?
+5. REVENUE: Is ${data.revenue} a plausible revenue figure for ${company}?
+6. ACTIVIST: Is the activist investor data (${data.activist_investors}) accurate to your knowledge?
+7. PREDICTION: Given everything you know about ${company}, does the prediction of ${pred.prediction} seem reasonable?
+   - If a successor has been named but incoming_ceo_announced is "no", the prediction should be "transition_underway".
+8. MISSING DATA: Which important fields are blank or "not clearly inferable" that should have data?
+9. COMPANY IDENTITY: Is this actually ${company} or could the model have confused it with another company?
 
 Return this JSON:
 {
   "ceo_name_verified": "correct|incorrect|uncertain",
   "ceo_name_note": "",
+  "successor_found": false,
+  "successor_name": "",
+  "successor_note": "",
   "tenure_verified": "correct|incorrect|uncertain",
   "tenure_note": "",
   "tsr_verified": "correct|plausible|incorrect|uncertain",
@@ -797,6 +827,15 @@ async function runPipeline(company, ticker, log) {
   if (validation.ceo_name_verified === "incorrect") {
     data.ceo_name = data.ceo_name + " ⚠";
   }
+  // If validation found a successor that research missed — apply it
+  if (validation.successor_found && validation.successor_name &&
+      (data.incoming_ceo_name === "N/A" || !data.incoming_ceo_name)) {
+    data.incoming_ceo_name = validation.successor_name;
+    data.incoming_ceo_announced = "yes";
+    finalPred.prediction = "transition_underway";
+    finalPred.confidence = "high";
+    log(p=>[...p,`[${company}] ⚡ Successor found by validation: ${validation.successor_name}`]);
+  }
   log(p=>[...p,`[${company}] ✓ Complete (QC: ${validation.data_completeness_score}% | ${challenge.should_revise?"Prediction revised":"Prediction held"})`]);
   return {
     company:cl(company,8), ticker:cl(ticker||"",6),
@@ -837,6 +876,10 @@ async function runPipeline(company, ticker, log) {
     coo_or_president_appointed:data.coo_or_president_appointed||"",
     board_refreshed_2yr:data.board_refreshed_2yr||"",
     investor_impact:pred.investor_impact||"",
+    // Successor (from validation correction if missed by research)
+    incoming_ceo_name: data.incoming_ceo_name,
+    incoming_ceo_announced: data.incoming_ceo_announced,
+    successor_found_by_validation: validation.successor_found||false,
     // Challenge agent
     challenge_points:     challenge.challenge_points||[],
     overriding_factors:   challenge.overriding_factors||[],
