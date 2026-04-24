@@ -1,3 +1,4 @@
+// v7-agents build
 import { useState, useRef, useEffect } from "react";
 
 // ── Global styles ─────────────────────────────────────────────────────────────
@@ -788,7 +789,7 @@ async function runPipeline(company, ticker, log) {
     validation_flags:     (validation.flags||[]).map(f=>String(f)),
     validation_missing:   (validation.missing_critical_fields||[]).map(f=>String(f)),
     qc_score:             validation.data_completeness_score||0,
-    qc_summary:           validation.qc_summary||"",,
+    qc_summary:           validation.qc_summary||"",
   };
 }
 
