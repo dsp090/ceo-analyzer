@@ -29,7 +29,7 @@ const C = {
 // ── FIXED: direct Portkey URL (no proxy needed) ───────────────────────────────
 const PORTKEY_URL = "/api/chat/completions"; // proxied via vite → portkey.bain.dev
 const PORTKEY_KEY = "2bayMIyF+J3J0aJtcc4i1HvrfLAS";
-const MODEL       = "@ceo-coe/gpt-5.4";
+const MODEL       = "@ceo-coe/gpt-4o-search-preview";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const ni  = v => !v || String(v).toLowerCase().includes("not clearly");
