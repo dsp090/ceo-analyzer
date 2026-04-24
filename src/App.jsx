@@ -65,17 +65,12 @@ async function callLLM(sys, usr, webSearch=false) {
     messages: [{role:"system",content:sys},{role:"user",content:usr}],
     max_completion_tokens: 1024,
   };
-  // Mirror Python script: extra_body with plugins for web search
   if(webSearch) {
-    body.plugins = [{id:"webSearch"}];           // Portkey plugin format
-    body.extra_body = {plugins:[{id:"webSearch"}]}; // fallback extra_body format
+    body.plugins = [{id:"webSearch"}];
   }
   const r = await fetch(PORTKEY_URL, {
     method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-portkey-api-key":PORTKEY_KEY,
-    },
+    headers:{"Content-Type":"application/json","x-portkey-api-key":PORTKEY_KEY},
     body:JSON.stringify(body)
   });
   if(!r.ok) throw new Error(`Portkey ${r.status}: ${await r.text()}`);
@@ -129,57 +124,41 @@ async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
 
-  const sys = `You are a corporate intelligence analyst with access to the latest news. Today is ${today}.
-Your job: find the MOST CURRENT CEO for this company. If there was a leadership change in ${yr} or ${yr-1}, report the NEW CEO.
-Do NOT default to a long-tenured CEO if a change has occurred recently.`;
+  const sys = `You are a corporate intelligence expert. Today is ${today}.
+Answer based on your most recent training knowledge.
+If a CEO changed in ${yr} or ${yr-1}, that is the correct answer — not the previous CEO.`;
 
   const prompt = `Company: "${company}"
-Today: ${today}
 
-Search for the latest CEO news and answer ALL questions with full names and dates:
+Answer these questions using your most up-to-date knowledge:
 
-Q1. CURRENT CEO: Who is the CEO of "${company}" RIGHT NOW as of ${today}?
-    Full first and last name. When did they take over?
+Q1. CURRENT CEO: Who is the CEO of "${company}" right now? Full first and last name.
+Q2. RECENT CHANGE: Has the CEO changed in ${yr} or ${yr-1}? Yes/No. If yes: old CEO name, new CEO name, when.
+Q3. DEPARTURE: Has any CEO formally announced stepping down or retiring? Yes/No. If yes: name + date.
+Q4. SUCCESSOR: Has a named person been confirmed as next CEO? Yes/No. If yes: full name, background, start date.
 
-Q2. RECENT CEO CHANGE: Has "${company}" changed CEO in ${yr} or ${yr-1}?
-    Yes or No. If Yes: Old CEO full name + departure date. New CEO full name + start date.
+Think carefully:
+- Apple Inc: Has Tim Cook stepped down? Is John Ternus now CEO?
+- For any company: what is the LATEST CEO you know about?
+- Give the most recent information you have, even if it was very recent.`;
 
-Q3. DEPARTURE ANNOUNCED: Has any CEO formally announced stepping down / retiring / being replaced?
-    Yes or No. If Yes: their name and the announcement date.
-
-Q4. NAMED SUCCESSOR: Has a specific named person been publicly announced as the NEXT CEO?
-    Yes or No. If Yes: their FULL NAME, their background/previous role, their confirmed start date.
-
-Q5. TRANSITION STATUS: Is a CEO transition currently underway or imminent?
-
-Search using: "${company} CEO ${yr}", "${company} new CEO", "${company} CEO change", "${company} CEO steps down", "${company} appoints CEO"
-
-RULES:
-- Always give FULL first + last names
-- If a CEO change happened in ${yr}, that is the answer — not the previous CEO
-- If multiple sources confirm a CEO change, report it even if it is very recent
-- For Apple Inc specifically: check if Tim Cook has stepped down and if John Ternus has been named CEO`;
-
-  // Try web search first
+  // Always make both calls — plugin may or may not fire, model knowledge always works
+  const results = [];
   try {
     const r1 = await callLLM(sys, prompt, true);
-    if (r1 && r1.length > 50) {
-      // Also get model knowledge and merge
-      try {
-        const r2 = await callLLM(sys, prompt, false);
-        if (r2 && r2.length > 50) return `WEB SEARCH RESULT:
-${r1}
+    if (r1 && r1.length > 30) results.push("SEARCH:
+" + r1);
+  } catch {}
+  try {
+    const r2 = await callLLM(sys, prompt, false);
+    if (r2 && r2.length > 30) results.push("KNOWLEDGE:
+" + r2);
+  } catch {}
+  return results.length ? results.join("
 
-MODEL KNOWLEDGE:
-${r2}`;
-      } catch {}
-      return r1;
-    }
-    throw new Error("empty web result");
-  } catch {
-    try { return await callLLM(sys, prompt, false); }
-    catch { return `No CEO news found for ${company}.`; }
-  }
+---
+
+") : `No data found for ${company}.`;
 }
 // ── Agent 2: Research — build full CEO profile from news + training data ──────
 async function agentResearch(company, ticker, webCtx) {
@@ -714,6 +693,78 @@ qc_summary: 2-3 sentence plain English summary of data quality and any concerns`
   return r;
 }
 
+// ── Agent 8: Challenge — argues AGAINST the prediction to find weaknesses ────
+async function agentChallenge(company, data, pred, finance, press) {
+  const today = new Date().toDateString();
+  const fallback = {
+    challenge_points: [],
+    overriding_factors: [],
+    revised_confidence: pred.confidence,
+    should_revise: false,
+    revised_prediction: pred.prediction,
+    challenge_summary: ""
+  };
+
+  const raw = await callLLM(
+    `You are a devil's advocate analyst. Today is ${today}.
+Your job is to CHALLENGE the prediction below and find reasons it could be WRONG.
+Be critical and specific. Think about what evidence contradicts the prediction.
+Return ONLY valid JSON.`,
+
+    `Company: ${company}
+CEO: ${data.ceo_name} | Tenure: ${data.ceo_tenure_years}yr | Age: ${data.ceo_age}
+Ownership: ${data.ownership_category}
+Current prediction: ${pred.prediction} (confidence: ${pred.confidence})
+TSR: ${data.tsr_1yr} / ${data.tsr_3yr} vs peers: ${data.tsr_vs_peers}
+Activist investors: ${data.activist_investors}
+Finance view: ${finance.view}
+Press view: ${press.view}
+Rationale given: ${pred.analytical_rationale}
+
+━━━ YOUR TASKS ━━━
+
+STEP 1 — ARGUE AGAINST THE PREDICTION:
+What specific evidence or facts CONTRADICT the prediction of "${pred.prediction}"?
+- If predicted High: what retention signals, contract renewals, or strong performance data suggest LOW risk?
+- If predicted Low: what age, tenure, performance, or activist signals suggest HIGHER risk?
+- If predicted Transition: is there any evidence the transition might not happen?
+
+STEP 2 — WHAT WAS MISSED?
+What important context about ${company} and ${data.ceo_name} might the research have missed?
+Think about: board dynamics, peer comparisons, sector norms, recent news, contract details.
+
+STEP 3 — SHOULD THE PREDICTION BE REVISED?
+Given the challenges above, is the original prediction still the best call?
+Or should it be revised up or down?
+
+Return this JSON:
+{
+  "challenge_points": [],
+  "overriding_factors": [],
+  "revised_confidence": "",
+  "should_revise": false,
+  "revised_prediction": "",
+  "challenge_summary": ""
+}
+
+challenge_points: up to 4 specific reasons the prediction COULD BE WRONG — cite actual facts
+overriding_factors: up to 3 reasons the original prediction is STILL correct despite challenges
+revised_confidence: "high" | "medium" | "low" — how confident after challenge
+should_revise: true if the prediction should change, false if it holds
+revised_prediction: the prediction after challenge — can be same or different
+challenge_summary: 2-3 sentences summarising the challenge and final verdict`
+  );
+
+  const r = parseJSON(raw, fallback);
+  r.challenge_points    = lst(r.challenge_points, 4, 30);
+  r.overriding_factors  = lst(r.overriding_factors, 3, 25);
+  r.challenge_summary   = cl(r.challenge_summary||"", 60);
+  r.revised_prediction  = cl(r.revised_prediction||pred.prediction, 3);
+  r.revised_confidence  = cl(r.revised_confidence||pred.confidence, 2);
+  r.should_revise       = Boolean(r.should_revise);
+  return r;
+}
+
 // ── Full pipeline ─────────────────────────────────────────────────────────────
 async function runPipeline(company, ticker, log) {
   log(p=>[...p,`[${company}] 🔍 Fetching live CEO news...`]);
@@ -732,13 +783,21 @@ async function runPipeline(company, ticker, log) {
   const industry = await agentIndustry(data);
   log(p=>[...p,`[${company}] 🎯 Prediction agent...`]);
   const pred = await agentPrediction(data, finance, press, industry);
+  log(p=>[...p,`[${company}] 🔴 Challenging prediction...`]);
+  const challenge = await agentChallenge(company, data, pred, finance, press);
+  // If challenge recommends revision, update the prediction
+  const finalPred = challenge.should_revise ? {
+    ...pred,
+    prediction: challenge.revised_prediction,
+    confidence: challenge.revised_confidence,
+    analytical_rationale: pred.analytical_rationale + " [Post-challenge revision: " + challenge.challenge_summary + "]"
+  } : pred;
   log(p=>[...p,`[${company}] ✅ Validating & QC checking...`]);
-  const validation = await agentValidation(company, ticker, data, finance, press, pred);
-  // Apply validation corrections — if validator flags CEO as wrong, note it
+  const validation = await agentValidation(company, ticker, data, finance, press, finalPred);
   if (validation.ceo_name_verified === "incorrect") {
     data.ceo_name = data.ceo_name + " ⚠";
   }
-  log(p=>[...p,`[${company}] ✓ Complete (QC score: ${validation.data_completeness_score}%)`]);
+  log(p=>[...p,`[${company}] ✓ Complete (QC: ${validation.data_completeness_score}% | ${challenge.should_revise?"Prediction revised":"Prediction held"})`]);
   return {
     company:cl(company,8), ticker:cl(ticker||"",6),
     sector:data.sector, ceo_name:data.ceo_name, ceo_age:data.ceo_age,
@@ -778,6 +837,11 @@ async function runPipeline(company, ticker, log) {
     coo_or_president_appointed:data.coo_or_president_appointed||"",
     board_refreshed_2yr:data.board_refreshed_2yr||"",
     investor_impact:pred.investor_impact||"",
+    // Challenge agent
+    challenge_points:     challenge.challenge_points||[],
+    overriding_factors:   challenge.overriding_factors||[],
+    challenge_summary:    challenge.challenge_summary||"",
+    prediction_revised:   challenge.should_revise||false,
     // Validation & QC
     validation_ceo:       validation.ceo_name_verified||"unverified",
     validation_ceo_note:  validation.ceo_name_note||"",
@@ -867,6 +931,11 @@ function exportToExcel(results) {
     { key:"validation_company",    label:"Company Identity Check"               },
     { key:"validation_flags",      label:"QC Flags",  fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"validation_missing",    label:"Missing Fields", fmt: v => Array.isArray(v)?v.join(", "):v },
+    // Challenge agent
+    { key:"challenge_points",      label:"Challenge Points",    fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"overriding_factors",    label:"Overriding Factors",  fmt: v => Array.isArray(v)?v.join(" | "):v },
+    { key:"challenge_summary",     label:"Challenge Summary"                        },
+    { key:"prediction_revised",    label:"Prediction Revised?", fmt: v => v?"Yes":"No" },
   ];
 
   // Build CSV content
@@ -1280,13 +1349,48 @@ function Detail({r}){
               })}
             </div>
             {r.validation_missing?.length>0&&(
-              <div style={{background:"#FFF8ED",border:"1px solid #F0D080",borderRadius:9,padding:"12px 14px"}}>
+              <div style={{background:"#FFF8ED",border:"1px solid #F0D080",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
                 <SH>Missing Critical Fields</SH>
                 <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                   {r.validation_missing.map((f,i)=>(
                     <span key={i} style={{background:"#FFF3DC",border:"1px solid #B56E00",borderRadius:4,padding:"3px 8px",fontSize:10,color:"#B56E00",fontWeight:600}}>{f}</span>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* ── Challenge Agent Results ── */}
+            {r.challenge_points?.length>0&&(
+              <div style={{background:"#fff",border:"1px solid rgba(0,0,0,0.07)",borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+                <SH>Prediction Challenge</SH>
+                {r.prediction_revised&&(
+                  <div style={{background:"#FFE8E8",border:"1px solid #CC0000",borderRadius:6,padding:"6px 10px",marginBottom:8,fontSize:11,color:"#CC0000",fontWeight:700}}>
+                    ⚠ Prediction was revised after challenge
+                  </div>
+                )}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:800,color:"#CC0000",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>Arguments Against</div>
+                    {r.challenge_points.map((p,i)=>(
+                      <div key={i} style={{display:"flex",gap:6,marginBottom:5,fontSize:12,color:"#444",alignItems:"flex-start"}}>
+                        <span style={{color:"#CC0000",flexShrink:0,fontWeight:800}}>✗</span>{p}
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:800,color:"#1A7A3C",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>Reasons It Still Holds</div>
+                    {(r.overriding_factors||[]).map((p,i)=>(
+                      <div key={i} style={{display:"flex",gap:6,marginBottom:5,fontSize:12,color:"#444",alignItems:"flex-start"}}>
+                        <span style={{color:"#1A7A3C",flexShrink:0,fontWeight:800}}>✓</span>{p}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {r.challenge_summary&&(
+                  <div style={{marginTop:8,padding:"8px 10px",background:"#F5F5FA",borderRadius:6,fontSize:12,color:"#1C1C2E",lineHeight:1.5}}>
+                    <strong>Challenge verdict:</strong> {r.challenge_summary}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1394,7 +1498,7 @@ export default function App(){
             </div>
           </div>
           <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
-            {[["🔍 Web Search","Live CEO news"],["📊 Research","Full profile"],["💰 Finance","TSR & revenue"],["📰 Press","Activism"],["🏭 Industry","Sector"],["🎯 Prediction","Board verdict"]].map(([l,s])=>(
+            {[["🔍 Web Search","Live CEO news"],["📊 Research","Full profile"],["💰 Finance","TSR & revenue"],["📰 Press","Activism"],["🏭 Industry","Sector"],["🎯 Prediction","Board verdict"],["🔴 Challenge","Devil's advocate"],["✅ Validation","QC check"]].map(([l,s])=>(
               <div key={l} style={{fontSize:11,color:"rgba(255,255,255,0.55)",lineHeight:1.5}}>
                 <div style={{fontWeight:800,color:"rgba(255,255,255,0.9)",fontSize:12}}>{l}</div>{s}
               </div>
