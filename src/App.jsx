@@ -358,69 +358,72 @@ CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST us
 }
 // ── Agent 3: Finance (deep dive) ─────────────────────────────────────────────
 async function agentFinance(data) {
-  const fallback={view:"no_clear_influence",financial_facts:[],revenue:data.revenue||"not clearly inferable",signals:[],concerns:[]};
+  const fallback={
+    view:"no_clear_influence", financial_facts:[], signals:[], concerns:[],
+    revenue:data.revenue||"not clearly inferable",
+    revenue_growth:"not clearly inferable", revenue_vs_prior:"not clearly inferable",
+    revenue_vs_peers:"not clearly inferable", operating_margin:"not clearly inferable",
+    margin_trend:"not clearly inferable", net_income:"not clearly inferable",
+    ebitda:"not clearly inferable", analyst_view:"not clearly inferable", key_risk:"not clearly inferable"
+  };
   const raw = await callLLM(
-    `You are a senior equity research analyst specialising in CEO succession risk. Today is ${new Date().toDateString()}.
-Your job is to do a DEEP financial analysis of this company and CEO, drawing on ALL your knowledge.
-Be specific — cite actual figures, dates, and named events. Return ONLY valid JSON.`,
+    `You are a senior equity research analyst. Today is ${new Date().toDateString()}.
+Do a DEEP financial statement analysis. Be specific — cite actual figures, YoY changes, and peer comparisons.
+Return ONLY valid JSON, no markdown.`,
 
     `Company: ${data.company||""}  |  Ticker: ${data.ticker||""}  |  Sector: ${data.sector}
-CEO: ${data.ceo_name}  |  Tenure: ${data.ceo_tenure_years} years  |  Ownership: ${data.ownership_category}
+CEO: ${data.ceo_name}  |  Tenure: ${data.ceo_tenure_years}yr  |  Ownership: ${data.ownership_category}
+Known: Revenue ${data.revenue} | TSR 1yr ${data.tsr_1yr} | TSR 3yr ${data.tsr_3yr} | vs peers ${data.tsr_vs_peers}
 
-Known data from research agent:
-Revenue: ${data.revenue}
-TSR 1yr: ${data.tsr_1yr}  |  TSR 3yr: ${data.tsr_3yr}  |  TSR vs peers: ${data.tsr_vs_peers}
-Financial signals from research: ${JSON.stringify(data.financial_signals)}
+━━━ FINANCIAL STATEMENT ANALYSIS — use actual figures, USD only ━━━
+1. Revenue (latest FY): amount + fiscal year
+2. Revenue vs prior year: growth % — better or worse than FY-1?
+3. Revenue vs sector peers: faster/slower than sector median? Give both figures.
+4. Operating margin: current %, and vs prior year (expanding/stable/contracting)
+5. Margin trend: 3yr direction with start and end %
+6. Net income: latest FY with YoY change %
+7. EBITDA: latest FY if known
+8. TSR 1yr vs peers: exact % and how many pp above/below sector median
+9. TSR 3yr vs peers: exact % and comparison
+10. Analyst consensus: Buy/Hold/Sell — any recent downgrades?
+11. Key financial risk: single biggest concern for investors
 
-━━━ DEEP DIVE TASKS ━━━
-1. REVENUE & GROWTH: What is this company's actual revenue? Revenue growth trend over 2-3 years?
-2. PROFITABILITY: Are margins expanding or contracting? Any profit warnings or earnings misses?
-3. TSR PERFORMANCE: What is the actual TSR 1yr and 3yr? How does it compare to sector peers?
-4. BALANCE SHEET: Any leverage concerns, debt rating changes, or liquidity issues?
-5. ANALYST SENTIMENT: Any recent analyst downgrades, price target cuts, or sell ratings?
-6. SHAREHOLDER RETURNS: Dividend cuts, buyback suspensions, or capital allocation concerns?
-7. CEO ACCOUNTABILITY: Is the CEO directly blamed by investors or analysts for underperformance?
-
-Return this JSON:
+Return ONLY this JSON — all fields required, USD billions, no "not available":
 {
-  "view": "",
-  "revenue": "",
-  "tsr_1yr": "",
-  "tsr_3yr": "",
-  "tsr_vs_peers": "",
-  "financial_facts": [],
-  "signals": [],
-  "concerns": []
+  "view": "high_influence|medium_influence|weak_influence|no_clear_influence",
+  "revenue": "$XXbn FYxxxx",
+  "revenue_growth": "+X% YoY",
+  "revenue_vs_prior": "Better/Worse/Stable — one sentence",
+  "revenue_vs_peers": "Above/Below/In-line sector median — figures",
+  "operating_margin": "X.X% — expanding/stable/contracting",
+  "margin_trend": "3yr trend with start and end %",
+  "net_income": "$Xbn — up/down X% YoY",
+  "ebitda": "$Xbn FYxxxx",
+  "tsr_1yr": "+X%",
+  "tsr_3yr": "+X% p.a.",
+  "tsr_vs_peers": "Xpp above/below sector median",
+  "financial_facts": ["4 statement-level facts with actual numbers"],
+  "signals": ["up to 3 specific financial pressure signals"],
+  "concerns": ["up to 2 concrete risks"],
+  "analyst_view": "Buy/Hold/Sell — context",
+  "key_risk": "single biggest concern"
 }
-
-view: high_influence | medium_influence | weak_influence | no_clear_influence
-  • high_influence: sustained TSR underperformance, major earnings misses, CEO blamed for financial failures
-  • medium_influence: moderate underperformance, mixed results, some analyst concern
-  • weak_influence: one-off miss, generally solid performance
-  • no_clear_influence: strong financial performance, no pressure
-
-financial_facts: up to 4 items — SPECIFIC figures e.g. "Revenue $28bn FY2024, up 4% YoY", "TSR -12% vs sector median +8% over 3 years"
-signals: up to 3 SPECIFIC financial pressure signals with actual numbers
-concerns: up to 2 concrete financial risks that could accelerate CEO change
-revenue: USD only, format as $XXbn (billions) — always convert non-USD currencies to USD. Use actual figure if known.
-tsr_1yr / tsr_3yr: use actual % if known
-tsr_vs_peers: "above median", "below median", or specific figure
-⚠ Every item must be factual and specific. No generic observations.
-⚠ For major public companies, USE YOUR TRAINING KNOWLEDGE to fill in actual TSR and revenue figures.
-   Do NOT return "not clearly inferable" for Apple, Microsoft, Airbus, ArcelorMittal etc — you know these numbers.`
+⚠ USD ONLY — convert all currencies. Use your knowledge — do not say "not clearly inferable".`
   );
   const r = parseJSON(raw, fallback);
   r.view = cl(r.view||"no_clear_influence", 3);
-  r.financial_facts = lst(r.financial_facts, 4, 25);
-  r.signals = lst(r.signals, 3, 25);
-  r.concerns = lst(r.concerns, 2, 25);
-  r.revenue = normaliseRevenue(cl(r.revenue||data.revenue||"not clearly inferable", 10)||"not clearly inferable");
+  r.financial_facts = lst(r.financial_facts, 4, 30);
+  r.signals = lst(r.signals, 3, 30);
+  r.concerns = lst(r.concerns, 2, 30);
+  r.revenue = normaliseRevenue(cl(r.revenue||data.revenue||"not clearly inferable", 12)||"not clearly inferable");
   r.tsr_1yr = cl(r.tsr_1yr||data.tsr_1yr||"not clearly inferable", 8)||data.tsr_1yr||"not clearly inferable";
   r.tsr_3yr = cl(r.tsr_3yr||data.tsr_3yr||"not clearly inferable", 8)||data.tsr_3yr||"not clearly inferable";
-  r.tsr_vs_peers = cl(r.tsr_vs_peers||data.tsr_vs_peers||"not clearly inferable", 10)||data.tsr_vs_peers||"not clearly inferable";
+  r.tsr_vs_peers = cl(r.tsr_vs_peers||data.tsr_vs_peers||"not clearly inferable", 12)||data.tsr_vs_peers||"not clearly inferable";
+  for (const f of ["revenue_growth","revenue_vs_prior","revenue_vs_peers","operating_margin",
+                   "margin_trend","net_income","ebitda","analyst_view","key_risk"])
+    r[f] = cl(r[f]||"not clearly inferable", 20)||"not clearly inferable";
   return r;
 }
-
 // ── Agent 4: Press & Activism (deep dive) ───────────────────────────────────
 async function agentPress(data) {
   const fallback = {
@@ -590,10 +593,9 @@ async function agentPrediction(data, finance, press, industry) {
   const ten = tenureNum || 0;
 
   const raw = await callLLM(
-    `You are a CEO succession risk expert. Today is ${new Date().toDateString()}.
-Assess the succession risk level based on the data provided.
-Be accurate and calibrated. Do NOT use age >= 65 as a standalone trigger — it was removed.
-Do NOT mention age >= 65 as a classification rule in the rationale.
+    `You are a CEO succession risk expert at a top institutional investor. Today is ${new Date().toDateString()}.
+Your job is to give a DECISIVE risk rating — not a hedge. Medium is for genuinely ambiguous cases only.
+If the data clearly shows elevated risk (long tenure, older CEO, below-peer TSR, or multiple signals), rate it High.
 Return ONLY valid JSON, no extra text.`,
 
     `━━━ COMPANY DATA ━━━
@@ -885,6 +887,15 @@ async function runPipeline(company, ticker, log) {
     incoming_ceo_start_date:data.incoming_ceo_start_date,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
     revenue:normaliseRevenue(finance.revenue||data.revenue),
+    revenue_growth:finance.revenue_growth||"",
+    revenue_vs_prior:finance.revenue_vs_prior||"",
+    revenue_vs_peers:finance.revenue_vs_peers||"",
+    operating_margin:finance.operating_margin||"",
+    margin_trend:finance.margin_trend||"",
+    net_income:finance.net_income||"",
+    ebitda:finance.ebitda||"",
+    analyst_view:finance.analyst_view||"",
+    key_risk:finance.key_risk||"",
     financial_summary:Array.isArray(finance.financial_facts)?finance.financial_facts.filter(Boolean).join(" | "):String(finance.financial_facts||""),
     // TSR: prefer finance agent enrichment over research agent (finance does deeper lookup)
     tsr_1yr:   (finance.tsr_1yr   &&!finance.tsr_1yr.includes("inferable"))   ? finance.tsr_1yr   : data.tsr_1yr,
@@ -1424,13 +1435,40 @@ function Detail({r}){
 
         {tab==="financials"&&(
           <div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+            {/* KPI row */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
               <KV label="Revenue" val={!ni(r.revenue)?r.revenue:""}/>
               <KV label="TSR 1yr" val={!ni(r.tsr_1yr)?r.tsr_1yr:""}/>
               <KV label="TSR 3yr" val={!ni(r.tsr_3yr)?r.tsr_3yr:""}/>
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+              <KV label="Operating Margin" val={!ni(r.operating_margin)?r.operating_margin:""}/>
+              <KV label="Analyst View" val={!ni(r.analyst_view)?r.analyst_view:""}/>
               <KV label="Finance View" val={VIEW_LABEL[r.finance_view]||r.finance_view}/>
             </div>
+
+            {/* Revenue comparison — single line */}
+            {(!ni(r.revenue_vs_prior)||!ni(r.revenue_vs_peers))&&(
+              <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 16px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
+                <SH>Revenue Comparison</SH>
+                <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
+                  {!ni(r.revenue_vs_prior)&&(
+                    <div>
+                      <div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Prior Year</div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_prior}</div>
+                    </div>
+                  )}
+                  {!ni(r.revenue_vs_peers)&&(
+                    <div>
+                      <div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Sector Peers</div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_peers}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {r.financial_signals?.length>0&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial Signals</SH>
@@ -1440,7 +1478,7 @@ function Detail({r}){
             {r.financial_summary&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial Summary</SH>
-                <div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.financial_summary}</div>
+                <div style={{fontSize:13,color:C.slate,lineHeight:1.6}}>{r.financial_summary}</div>
               </div>
             )}
           </div>
