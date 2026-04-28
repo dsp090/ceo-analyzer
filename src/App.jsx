@@ -1689,11 +1689,11 @@ export default function App(){
           .filter(r=>r[cI]&&String(r[cI]).toLowerCase()!=="company")
           .map(r=>({company:String(r[cI]||"").trim(), ticker:String(r[tI]||"").trim()}))
           .filter(r=>r.company)
-          .slice(0,20));
+          .slice(0,100));
       } else {
         const t=await f.text();
         const rows=t.split("\n").map(r=>r.split(",").map(c=>c.trim().replace(/^"|"$/g,"")));
-        setFileCos(rows.filter(r=>r[0]&&r[0].toLowerCase()!=="company").map(r=>({company:r[0],ticker:r[1]||""})).slice(0,20));
+        setFileCos(rows.filter(r=>r[0]&&r[0].toLowerCase()!=="company").map(r=>({company:r[0],ticker:r[1]||""})).slice(0,100));
       }
     } catch(e){setErr("File parse error: "+e.message);}
   };
