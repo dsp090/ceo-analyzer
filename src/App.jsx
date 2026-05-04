@@ -7,25 +7,27 @@ const injectGlobalStyle = () => {
   const s = document.createElement("style");
   s.textContent = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
-    html,body,#root{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#F0F0F0;}
+    html,body,#root{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#F1F2F4;}
     *{box-sizing:border-box;font-family:'Inter',system-ui,sans-serif;}
-    ::-webkit-scrollbar{width:3px;}
+    ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-track{background:transparent;}
-    ::-webkit-scrollbar-thumb{background:#D1D5DB;border-radius:99px;}
+    ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:99px;}
+    ::-webkit-scrollbar-thumb:hover{background:#94A3B8;}
     button:focus,textarea:focus,input:focus{outline:none;}
     button{font-family:'Inter',system-ui,sans-serif;}
+    textarea,input{font-size:13px;}
   `;
   document.head.appendChild(s);
 };
 
 const C = {
-  red:"#C00000", redD:"#900000", redDD:"#5A0000",
-  redBg:"rgba(192,0,0,0.06)",
-  ink:"#1A1A2E", slate:"#2D2D44", mid:"#6B7280", muted:"#9CA3AF",
-  white:"#FFFFFF", surface:"#FFFFFF", surfaceAlt:"#F8F9FA",
-  border:"#EBEBEB", borderStrong:"#D5D5D5",
-  ok:"#166534", okBg:"rgba(22,101,52,0.07)",
-  warn:"#854D0E", warnBg:"rgba(133,77,14,0.07)",
+  red:"#C00000", redD:"#900000", redDD:"#5C0000",
+  redBg:"rgba(192,0,0,0.05)", redBorder:"rgba(192,0,0,0.2)",
+  ink:"#111827", slate:"#1F2937", mid:"#6B7280", muted:"#9CA3AF",
+  white:"#FFFFFF", surface:"#FFFFFF", surfaceAlt:"#F9FAFB",
+  border:"#F0F0F0", borderMid:"#E5E7EB",
+  ok:"#166534", okBg:"rgba(22,101,52,0.06)",
+  warn:"#92400E", warnBg:"rgba(146,64,14,0.06)",
 };
 
 // ── FIXED: direct Portkey URL (no proxy needed) ───────────────────────────────
@@ -923,25 +925,52 @@ challenge_summary: 2-3 sentences summarising the challenge and final verdict`
 
 // ── Full pipeline ─────────────────────────────────────────────────────────────
 async function runPipeline(company, ticker, log) {
-  log(p=>[...p,`[${company}] 🔍 Fetching live CEO news...`]);
+
+  // ── STEP 1: CEO Scan ──────────────────────────────────────────────────────
+  log(p=>[...p,`[${company}] 1/6 CEO Scan — searching live news + model knowledge...`]);
   const webCtx = await fetchCEONews(company);
-  log(p=>[...p,`[${company}] 💹 Fetching financial data...`]);
   const finCtx = await fetchFinancialData(company, ticker);
-  log(p=>[...p,`[${company}] 📊 Research agent...`]);
+
+  // ── STEP 2: Profile Structuring + QC ─────────────────────────────────────
+  log(p=>[...p,`[${company}] 2/6 Profile Structuring — building CEO profile...`]);
   const data = await agentResearch(company, ticker, webCtx + "\n\nFINANCIAL DATA:\n" + finCtx);
-  if(data.incoming_ceo_announced==="yes") log(p=>[...p,`[${company}] ⚡ Incoming CEO: ${data.incoming_ceo_name}`]);
-  if(data.ceo_departure_announced==="yes") log(p=>[...p,`[${company}] ⚠ CEO departure announced`]);
-  log(p=>[...p,`[${company}] 💰 Finance agent...`]);
+  // QC runs inside agentResearch — log its outcome
+  if(data._profile_qc === "verified")
+    log(p=>[...p,`[${company}]     ✓ Profile QC passed — CEO: ${data.ceo_name}${data.incoming_ceo_announced==="yes"?" · Successor: "+data.incoming_ceo_name:""}`]);
+  if(data.ceo_departure_announced==="yes")
+    log(p=>[...p,`[${company}]     ⚠ Departure announced`]);
+
+  // ── STEP 3: Finance + QC ─────────────────────────────────────────────────
+  log(p=>[...p,`[${company}] 3/6 Finance — analysing revenue, TSR, margins...`]);
   const finance = await agentFinance(data);
-  log(p=>[...p,`[${company}] 📰 Press agent...`]);
+  // QC runs inside agentFinance — finance.revenue is already corrected if needed
+  if(finance._finance_qc === "verified")
+    log(p=>[...p,`[${company}]     ✓ Finance QC passed — Revenue: ${finance.revenue} · TSR 1yr: ${finance.tsr_1yr}`]);
+
+  // ── STEP 4: Press + QC ───────────────────────────────────────────────────
+  log(p=>[...p,`[${company}] 4/6 Press — scanning activism, controversies, probes...`]);
   const press = await agentPress(data);
-  log(p=>[...p,`[${company}] 🏭 Industry agent...`]);
+  if(press._press_qc === "verified")
+    log(p=>[...p,`[${company}]     ✓ Press QC passed — ${press.signals.length} verified signals`]);
+
+  // ── STEP 5: Industry + QC ────────────────────────────────────────────────
+  log(p=>[...p,`[${company}] 5/6 Industry — assessing sector dynamics...`]);
   const industry = await agentIndustry(data);
-  log(p=>[...p,`[${company}] 🎯 Prediction agent (with self-challenge)...`]);
+  log(p=>[...p,`[${company}]     ✓ Industry QC — ${industry.signals.length} specific signals (generic removed)`]);
+
+  // ── STEP 6: Prediction + Self-Challenge ──────────────────────────────────
+  // All QC-verified outputs feed into Prediction
+  log(p=>[...p,`[${company}] 6/6 Prediction — scoring with all verified agent outputs...`]);
   const pred = await agentPrediction(data, finance, press, industry);
-  log(p=>[...p,`[${company}] ✓ Complete (prediction ${pred._challenge==="revised"?"revised":"held"} | profile QC ${data._profile_qc})`]);
+  // Self-challenge runs inside agentPrediction
+  if(pred._challenge === "revised")
+    log(p=>[...p,`[${company}]     ⚡ Self-challenge revised prediction → ${pred.prediction}`]);
+  else
+    log(p=>[...p,`[${company}]     ✓ Self-challenge held — ${pred.prediction} (${pred.confidence} confidence)`]);
+
+  log(p=>[...p,`[${company}] ✅ Complete`]);
+
   const finalPred = pred;
-  // Synthetic validation object for backward compat with UI
   const validation = {
     ceo_name_verified: data._profile_qc === "verified" ? "correct" : "unverified",
     ceo_name_note: data._profile_qc === "verified" ? "Verified by embedded profile QC" : "",
@@ -1194,7 +1223,6 @@ function KV({label,val,hi=false}){
 function AgentView({label,view,signals=[],concerns=[]}){
   const col=VIEW_COLOR[view]||C.mid;
   const isHigh = view==="high_influence";
-  // Safe string render — prevent [object Object]
   const safeStr = v => (v && typeof v === "object") ? JSON.stringify(v) : String(v||"");
   return(
     <div style={{
@@ -1262,7 +1290,6 @@ function Detail({r}){
         flexShrink:0,
         borderLeft:isHigh?`4px solid ${C.red}`:"4px solid transparent"
       }}>
-        {/* Company name row */}
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:14,marginBottom:10}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:22,fontWeight:700,color:C.ink,letterSpacing:"-0.02em",lineHeight:1.15}}>{r.company}</div>
@@ -1282,7 +1309,6 @@ function Detail({r}){
           </div>
         </div>
 
-        {/* CEO data strip — light grey cards */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:10}}>
           {[
             ["CEO",r.ceo_name],
@@ -1298,17 +1324,12 @@ function Detail({r}){
           ))}
         </div>
 
-        {/* Successor alert — clean green-tinted */}
         {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"&&(
           <div style={{marginBottom:10,background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:5,padding:"7px 12px",fontSize:12,display:"flex",alignItems:"center",gap:8}}>
             <span style={{color:"#15803D",fontWeight:700,fontSize:11}}>SUCCESSOR</span>
             <span style={{color:C.ink,fontWeight:600}}>{r.incoming_ceo_name}</span>
-            {r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"&&(
-              <span style={{color:C.mid}}> — {r.incoming_ceo_background}</span>
-            )}
-            {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"&&(
-              <span style={{color:C.muted}}> · Starts: {r.incoming_ceo_start_date}</span>
-            )}
+            {r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"&&<span style={{color:C.mid}}> — {r.incoming_ceo_background}</span>}
+            {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"&&<span style={{color:C.muted}}> · Starts: {r.incoming_ceo_start_date}</span>}
           </div>
         )}
         {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&(
@@ -1323,12 +1344,10 @@ function Detail({r}){
         {TABS.map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{
             flex:1,padding:"10px 6px",border:"none",cursor:"pointer",
-            fontSize:12,fontWeight:600,
-            background:"transparent",
+            fontSize:12,fontWeight:600,background:"transparent",
             color:tab===t.id?C.red:C.mid,
             borderBottom:tab===t.id?`2px solid ${C.red}`:"2px solid transparent",
-            whiteSpace:"nowrap",minWidth:72,
-            transition:"color 0.15s"
+            whiteSpace:"nowrap",minWidth:72,transition:"color 0.15s"
           }}>{t.l}</button>
         ))}
       </div>
@@ -1338,29 +1357,22 @@ function Detail({r}){
 
         {tab==="overview"&&(
           <div>
-            {/* Row 1: Prediction + Confidence + Revenue */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8}}>
               <KV label="Prediction" val={PRED_LABEL[r.prediction]||r.prediction} hi={isHigh}/>
               <KV label="Confidence" val={r.confidence} hi={isHigh}/>
               <KV label="Revenue" val={!ni(r.revenue)?r.revenue:""}/>
             </div>
-
-            {/* Row 2: TSR */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:8}}>
               <KV label="TSR 1yr" val={!ni(r.tsr_1yr)?r.tsr_1yr:""}/>
               <KV label="TSR 3yr" val={!ni(r.tsr_3yr)?r.tsr_3yr:""}/>
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
             </div>
-
-            {/* Row 3: CEO facts */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
               <KV label="CEO Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
               <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
               <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)}/>
               <KV label="Activist Investors" val={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())?r.activist_investors:""} hi={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())}/>
             </div>
-
-            {/* Row 4: Context */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
               <KV label="Performance" val={!ni(r.performance_trajectory)?r.performance_trajectory:""}/>
               <KV label="M&A Activity" val={!ni(r.m_and_a_activity)?r.m_and_a_activity:""}/>
@@ -1368,36 +1380,24 @@ function Detail({r}){
               <KV label="COO / Heir Apparent" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
             </div>
 
-            {/* CEO Transition Alert */}
             {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&(
               <div style={{background:C.redBg,border:`1px solid #FECACA`,borderRadius:7,padding:"12px 15px",marginBottom:10}}>
                 <SH>CEO Transition Alert</SH>
-                {r.ceo_departure_announced==="yes"&&(
-                  <div style={{fontSize:13,color:C.redD,marginBottom:4}}>
-                    ⚠ Departure announced: <strong>{r.ceo_name}</strong> is leaving.
-                  </div>
-                )}
+                {r.ceo_departure_announced==="yes"&&<div style={{fontSize:13,color:C.redD,marginBottom:4}}>⚠ Departure announced: <strong>{r.ceo_name}</strong> is leaving.</div>}
                 {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"
-                  ?<div style={{fontSize:13,color:C.redD}}>
-                    ✓ Successor named: <strong>{r.incoming_ceo_name}</strong>
-                    {r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}
-                    {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` · Starts: ${r.incoming_ceo_start_date}`:""}
-                  </div>
+                  ?<div style={{fontSize:13,color:C.redD}}>✓ Successor named: <strong>{r.incoming_ceo_name}</strong>{r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}{r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` · Starts: ${r.incoming_ceo_start_date}`:""}</div>
                   :r.incoming_ceo_announced==="yes"&&<div style={{fontSize:13,color:C.redD}}>Successor not yet publicly named.</div>
                 }
               </div>
             )}
 
-            {/* Two-column: Leadership + Governance */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{background:C.white,border:`1px solid #FECACA`,borderRadius:8,padding:"13px 15px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Leadership &amp; Succession Signals</SH>
                 {r.leadership_signals?.filter(s=>s&&String(s).length>3).length>0
                   ?<Blist items={r.leadership_signals.filter(s=>s&&String(s).length>3)} col={C.red}/>
-                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific leadership signals identified.</div>
-                }
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific leadership signals identified.</div>}
               </div>
-
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 15px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Governance &amp; Succession Plan</SH>
                 {[
@@ -1407,19 +1407,11 @@ function Detail({r}){
                   !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
                   !ni(r.mandate_signals)?r.mandate_signals:"",
                 ].filter(Boolean).length>0
-                  ?<Blist items={[
-                    !ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",
-                    !ni(r.coo_or_president_appointed)?`COO / President: ${r.coo_or_president_appointed}`:"",
-                    !ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",
-                    !ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",
-                    !ni(r.mandate_signals)?r.mandate_signals:"",
-                  ].filter(Boolean)} col={"#003399"}/>
-                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific governance signals available.</div>
-                }
+                  ?<Blist items={[!ni(r.succession_plan_disclosed)?`Succession plan: ${r.succession_plan_disclosed}`:"",!ni(r.coo_or_president_appointed)?`COO / President: ${r.coo_or_president_appointed}`:"",!ni(r.board_refreshed_2yr)?`Board refresh: ${r.board_refreshed_2yr}`:"",!ni(r.contract_renewed)?`Contract: ${r.contract_renewed}`:"",!ni(r.mandate_signals)?r.mandate_signals:""].filter(Boolean)} col={"#003399"}/>
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific governance signals available.</div>}
               </div>
             </div>
 
-            {/* Two-column: Press + Financial */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 15px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Press &amp; Activism</SH>
@@ -1427,25 +1419,21 @@ function Detail({r}){
                   ?<Blist items={r.press_signals.filter(s=>s&&String(s).length>3)} col={C.red}/>
                   :r.press_controversies&&!ni(r.press_controversies)
                     ?<div style={{fontSize:14,color:C.slate,lineHeight:1.6}}>{r.press_controversies}</div>
-                    :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>
-                }
+                    :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No significant activist or press pressure identified.</div>}
                 {r.investor_activism&&!ni(r.investor_activism)&&!["none identified","not clearly"].some(x=>r.investor_activism.toLowerCase().includes(x))&&(
                   <div style={{marginTop:8,padding:"7px 10px",background:"#FEF2F2",borderRadius:5,fontSize:13,color:C.redD}}>
                     <strong>Activist detail:</strong> {r.investor_activism}
                   </div>
                 )}
               </div>
-
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 15px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial &amp; Industry Signals</SH>
                 {[...(r.financial_signals||[]),...(r.industry_signals||[])].filter(s=>s&&String(s).length>3).length>0
                   ?<Blist items={[...(r.financial_signals||[]),...(r.industry_signals||[])].filter(s=>s&&String(s).length>3).slice(0,5)} col={C.warn}/>
-                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific financial or industry signals identified.</div>
-                }
+                  :<div style={{fontSize:13,color:C.muted,fontStyle:"italic"}}>No specific financial or industry signals identified.</div>}
               </div>
             </div>
 
-            {/* Board-Ready Rationale */}
             {r.analytical_rationale&&(
               <div style={{background:"#1A1A2E",borderRadius:8,padding:"16px 20px",position:"relative",overflow:"hidden"}}>
                 <div style={{position:"absolute",right:-15,top:-15,width:80,height:80,borderRadius:"50%",background:"rgba(255,255,255,0.04)"}}/>
@@ -1522,7 +1510,6 @@ function Detail({r}){
 
         {tab==="financials"&&(
           <div>
-            {/* KPI row */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
               <KV label="Revenue" val={!ni(r.revenue)?r.revenue:""}/>
               <KV label="TSR 1yr" val={!ni(r.tsr_1yr)?r.tsr_1yr:""}/>
@@ -1534,28 +1521,15 @@ function Detail({r}){
               <KV label="Analyst View" val={!ni(r.analyst_view)?r.analyst_view:""}/>
               <KV label="Finance View" val={VIEW_LABEL[r.finance_view]||r.finance_view}/>
             </div>
-
-            {/* Revenue comparison — single line */}
             {(!ni(r.revenue_vs_prior)||!ni(r.revenue_vs_peers))&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 16px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Revenue Comparison</SH>
                 <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
-                  {!ni(r.revenue_vs_prior)&&(
-                    <div>
-                      <div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Prior Year</div>
-                      <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_prior}</div>
-                    </div>
-                  )}
-                  {!ni(r.revenue_vs_peers)&&(
-                    <div>
-                      <div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Sector Peers</div>
-                      <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_peers}</div>
-                    </div>
-                  )}
+                  {!ni(r.revenue_vs_prior)&&<div><div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Prior Year</div><div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_prior}</div></div>}
+                  {!ni(r.revenue_vs_peers)&&<div><div style={{fontSize:10,color:C.mid,textTransform:"uppercase",letterSpacing:"0.08em",fontWeight:600,marginBottom:3}}>vs Sector Peers</div><div style={{fontSize:14,fontWeight:600,color:C.ink}}>{r.revenue_vs_peers}</div></div>}
                 </div>
               </div>
             )}
-
             {r.financial_signals?.length>0&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Financial Signals</SH>
@@ -1589,13 +1563,8 @@ function Detail({r}){
 
         {tab==="qc"&&(
           <div>
-            {/* Score row */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
-              <div style={{
-                background:r.qc_score>=80?"#F0FDF4":r.qc_score>=50?"#FFFBEB":"#FEF2F2",
-                border:`1px solid ${r.qc_score>=80?"#BBF7D0":r.qc_score>=50?"#FDE68A":"#FECACA"}`,
-                borderRadius:7,padding:"13px",textAlign:"center"
-              }}>
+              <div style={{background:r.qc_score>=80?"#F0FDF4":r.qc_score>=50?"#FFFBEB":"#FEF2F2",border:`1px solid ${r.qc_score>=80?"#BBF7D0":r.qc_score>=50?"#FDE68A":"#FECACA"}`,borderRadius:7,padding:"13px",textAlign:"center"}}>
                 <div style={{fontSize:9,color:C.mid,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:5}}>Data Completeness</div>
                 <div style={{fontSize:32,fontWeight:800,color:r.qc_score>=80?C.ok:r.qc_score>=50?C.warn:C.red}}>{r.qc_score||0}%</div>
               </div>
@@ -1605,16 +1574,11 @@ function Detail({r}){
               </div>
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:7,padding:"13px",boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <div style={{fontSize:9,color:C.mid,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:5}}>Company Identity</div>
-                <div style={{fontSize:13,fontWeight:700,color:r.validation_company==="correct"?C.ok:r.validation_company==="confused"?C.red:C.warn}}>
-                  {r.validation_company||"—"}
-                </div>
-                {r.validation_flags?.map((f,i)=>(
-                  <div key={i} style={{fontSize:10,color:C.red,marginTop:4}}>⚠ {f}</div>
-                ))}
+                <div style={{fontSize:13,fontWeight:700,color:r.validation_company==="correct"?C.ok:r.validation_company==="confused"?C.red:C.warn}}>{r.validation_company||"—"}</div>
+                {r.validation_flags?.map((f,i)=><div key={i} style={{fontSize:10,color:C.red,marginTop:4}}>⚠ {f}</div>)}
               </div>
             </div>
 
-            {/* Field verification */}
             <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 15px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
               <SH>Field Verification</SH>
               {[
@@ -1623,10 +1587,8 @@ function Detail({r}){
                 ["Revenue",r.revenue,r.validation_revenue,""],
                 ["Prediction",r.prediction,r.validation_prediction,r.validation_prediction_note],
               ].map(([label,value,status,note],i)=>{
-                const isGood = ["correct","plausible","reasonable"].includes(status);
-                const isBad  = ["incorrect","too_high","too_low","confused"].includes(status);
-                const sc  = isGood?C.ok:isBad?C.red:C.warn;
-                const sbg = isGood?"#F0FDF4":isBad?"#FEF2F2":"#FFFBEB";
+                const isGood=["correct","plausible","reasonable"].includes(status);
+                const isBad=["incorrect","too_high","too_low","confused"].includes(status);
                 return(
                   <div key={i} style={{display:"grid",gridTemplateColumns:"130px 1fr 110px",gap:8,padding:"9px 0",borderBottom:`1px solid ${C.border}`,alignItems:"start"}}>
                     <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{label}</div>
@@ -1634,25 +1596,21 @@ function Detail({r}){
                       <div style={{fontSize:13,color:C.ink}}>{value||"—"}</div>
                       {note&&<div style={{fontSize:10,color:C.mid,marginTop:2}}>{note}</div>}
                     </div>
-                    <div style={{background:sbg,borderRadius:3,padding:"3px 8px",fontSize:10,fontWeight:700,color:sc,textAlign:"center"}}>{status||"—"}</div>
+                    <div style={{background:isGood?"#F0FDF4":isBad?"#FEF2F2":"#FFFBEB",borderRadius:3,padding:"3px 8px",fontSize:10,fontWeight:700,color:isGood?C.ok:isBad?C.red:C.warn,textAlign:"center"}}>{status||"—"}</div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Missing fields */}
             {r.validation_missing?.length>0&&(
               <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,padding:"12px 14px",marginBottom:10}}>
                 <SH>Missing Critical Fields</SH>
                 <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                  {r.validation_missing.map((f,i)=>(
-                    <span key={i} style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:3,padding:"3px 8px",fontSize:10,color:"#92400E",fontWeight:600}}>{f}</span>
-                  ))}
+                  {r.validation_missing.map((f,i)=><span key={i} style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:3,padding:"3px 8px",fontSize:10,color:"#92400E",fontWeight:600}}>{f}</span>)}
                 </div>
               </div>
             )}
 
-            {/* Challenge results */}
             {r.challenge_points?.length>0&&(
               <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 15px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.04)"}}>
                 <SH>Prediction Challenge</SH>
@@ -1664,21 +1622,11 @@ function Detail({r}){
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
                   <div>
                     <div style={{fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:7}}>Arguments Against</div>
-                    {r.challenge_points.map((p,i)=>(
-                      <div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}>
-                        <span style={{color:C.red,flexShrink:0,fontWeight:700}}>✗</span>
-                        {typeof p === "object" ? JSON.stringify(p) : String(p||"")}
-                      </div>
-                    ))}
+                    {r.challenge_points.map((p,i)=><div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}><span style={{color:C.red,flexShrink:0,fontWeight:700}}>✗</span>{typeof p==="object"?JSON.stringify(p):String(p||"")}</div>)}
                   </div>
                   <div>
                     <div style={{fontSize:10,fontWeight:700,color:C.ok,textTransform:"uppercase",letterSpacing:"0.09em",marginBottom:7}}>Reasons It Still Holds</div>
-                    {(r.overriding_factors||[]).map((p,i)=>(
-                      <div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}>
-                        <span style={{color:C.ok,flexShrink:0,fontWeight:700}}>✓</span>
-                        {typeof p === "object" ? JSON.stringify(p) : String(p||"")}
-                      </div>
-                    ))}
+                    {(r.overriding_factors||[]).map((p,i)=><div key={i} style={{display:"flex",gap:7,marginBottom:7,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.55}}><span style={{color:C.ok,flexShrink:0,fontWeight:700}}>✓</span>{typeof p==="object"?JSON.stringify(p):String(p||"")}</div>)}
                   </div>
                 </div>
                 {r.challenge_summary&&(
@@ -1699,7 +1647,6 @@ function Detail({r}){
 // ── Company Row ───────────────────────────────────────────────────────────────
 function CRow({r,idx,sel,onClick}){
   const isH=isHighPred(r.prediction);
-  const col=PRED_COLOR[r.prediction]||C.mid;
   const [hov,setHov]=useState(false);
   return(
     <div onClick={onClick}
@@ -1713,18 +1660,10 @@ function CRow({r,idx,sel,onClick}){
         transition:"all 0.12s"
       }}>
       <div style={{display:"flex",alignItems:"center",gap:10}}>
-        <div style={{
-          width:24,height:24,borderRadius:5,
-          background:isH?"rgba(192,0,0,0.08)":"#F3F4F6",
-          color:isH?C.red:C.mid,
-          display:"flex",alignItems:"center",justifyContent:"center",
-          fontSize:11,fontWeight:700,flexShrink:0
-        }}>{idx+1}</div>
+        <div style={{width:24,height:24,borderRadius:5,background:isH?"rgba(192,0,0,0.08)":"#F3F4F6",color:isH?C.red:C.mid,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{idx+1}</div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:13,color:sel?C.red:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.company}</div>
-          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-            {r.ceo_name||"—"}{r.ceo_tenure_years?` · ${r.ceo_tenure_years}yr`:""}
-          </div>
+          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.ceo_name||"—"}{r.ceo_tenure_years?` · ${r.ceo_tenure_years}yr`:""}</div>
         </div>
         <PredBadge pred={r.prediction} sm/>
       </div>
@@ -1751,7 +1690,7 @@ export default function App(){
   const [logs,setLogs]=useState([]);
   const [err,setErr]=useState("");
   const [sel,setSel]=useState(null);
-  const [showIn,setShowIn]=useState(true); // collapses after first run
+  const [showIn,setShowIn]=useState(true);
   const fRef=useRef();
 
   useEffect(()=>{ injectGlobalStyle(); },[]);
@@ -1765,18 +1704,13 @@ export default function App(){
         const wb = XLSX.read(buf, {type:"array"});
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
-        // Find company/ticker columns (header row detection)
         const header = rows[0]?.map(h=>String(h).toLowerCase().trim()) || [];
         const compIdx = header.findIndex(h=>h.includes("company")||h.includes("name"));
         const tickIdx = header.findIndex(h=>h.includes("ticker")||h.includes("symbol")||h.includes("tick"));
         const cI = compIdx>=0 ? compIdx : 0;
         const tI = tickIdx>=0 ? tickIdx : 1;
         const dataRows = compIdx>=0 ? rows.slice(1) : rows;
-        setFileCos(dataRows
-          .filter(r=>r[cI]&&String(r[cI]).toLowerCase()!=="company")
-          .map(r=>({company:String(r[cI]||"").trim(), ticker:String(r[tI]||"").trim()}))
-          .filter(r=>r.company)
-          .slice(0,100));
+        setFileCos(dataRows.filter(r=>r[cI]&&String(r[cI]).toLowerCase()!=="company").map(r=>({company:String(r[cI]||"").trim(),ticker:String(r[tI]||"").trim()})).filter(r=>r.company).slice(0,100));
       } else {
         const t=await f.text();
         const rows=t.split("\n").map(r=>r.split(",").map(c=>c.trim().replace(/^"|"$/g,"")));
@@ -1784,6 +1718,7 @@ export default function App(){
       }
     } catch(e){setErr("File parse error: "+e.message);}
   };
+
   const parseTxt=()=>txt.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(",");return{company:p[0]?.trim(),ticker:p[1]?.trim()||""};}).filter(c=>c.company).slice(0,20);
 
   const run=async()=>{
@@ -1814,13 +1749,11 @@ export default function App(){
   const selR=sel!=null?sorted[sel]:null;
 
   return(
-    <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column",background:"#F5F4F0",fontFamily:"'DM Sans',sans-serif",overflow:"hidden"}}>
+    <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column",background:"#F5F4F0",fontFamily:"'Inter',system-ui,sans-serif",overflow:"hidden"}}>
 
       {/* ── NAV ── */}
       <div style={{background:C.red,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 24px",height:54,gap:16}}>
-
-          {/* Logo + title */}
           <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
               <rect width="28" height="28" rx="5" fill="rgba(255,255,255,0.15)"/>
@@ -1830,11 +1763,10 @@ export default function App(){
             </svg>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#fff",letterSpacing:"-0.02em",lineHeight:1.2}}>CEO Succession Risk Analyzer</div>
-              <div style={{fontSize:10.5,color:"rgba(255,255,255,0.65)",fontWeight:400}}>Bain &amp; Company · -agent pipeline</div>
+              <div style={{fontSize:10.5,color:"rgba(255,255,255,0.65)",fontWeight:400}}>Bain &amp; Company · 6-agent self-correcting pipeline</div>
             </div>
           </div>
 
-          {/* Pipeline steps */}
           <div style={{display:"flex",gap:3,flexWrap:"nowrap",flex:1,justifyContent:"center"}}>
             {[
               ["CEO Scan",          "Searches live web + model knowledge for CEO appointments, departures and named successors · Self-corrects if results are thin or contradictory"],
@@ -1844,25 +1776,14 @@ export default function App(){
               ["Industry",          "Assesses sector disruption, M&A dynamics and competitive pressures · Embedded QC removes generic signals not specific to this company"],
               ["Prediction",        "Applies hard rules then LLM scoring for a board-ready verdict · Embedded self-challenge argues against and auto-revises if evidence is stronger"],
             ].map(([l,tip],i)=>(
-              <div key={l} title={tip} style={{
-                fontSize:10,fontWeight:500,color:"rgba(255,255,255,0.75)",
-                padding:"3px 8px",borderRadius:3,
-                background:"rgba(0,0,0,0.15)",
-                whiteSpace:"nowrap",cursor:"default"
-              }}>{i+1}. {l}</div>
+              <div key={l} title={tip} style={{fontSize:10,fontWeight:500,color:"rgba(255,255,255,0.75)",padding:"3px 8px",borderRadius:3,background:"rgba(0,0,0,0.15)",whiteSpace:"nowrap",cursor:"default"}}>{i+1}. {l}</div>
             ))}
           </div>
 
-          {/* Actions + stats */}
           <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
             {results.length>0&&!running&&(
               <div style={{display:"flex",gap:14,alignItems:"center",padding:"4px 14px",background:"rgba(0,0,0,0.15)",borderRadius:6}}>
-                {[
-                  {l:"Total",v:results.length,c:"rgba(255,255,255,0.9)"},
-                  {l:"High+",v:(pc.new_ceo_appointed||0)+(pc.transition_underway||0)+(pc.high_likelihood||0),c:"#FFB3B3"},
-                  {l:"Medium",v:pc.medium_likelihood||0,c:"#FFD580"},
-                  {l:"Low",v:pc.low_likelihood||0,c:"#86EFAC"}
-                ].map(({l,v,c})=>(
+                {[{l:"Total",v:results.length,c:"rgba(255,255,255,0.9)"},{l:"High+",v:(pc.new_ceo_appointed||0)+(pc.transition_underway||0)+(pc.high_likelihood||0),c:"#FFB3B3"},{l:"Medium",v:pc.medium_likelihood||0,c:"#FFD580"},{l:"Low",v:pc.low_likelihood||0,c:"#86EFAC"}].map(({l,v,c})=>(
                   <div key={l} style={{textAlign:"center"}}>
                     <div style={{fontSize:17,fontWeight:700,color:c,lineHeight:1}}>{v}</div>
                     <div style={{fontSize:9,color:"rgba(255,255,255,0.5)",fontWeight:500,textTransform:"uppercase",letterSpacing:"0.06em",marginTop:2}}>{l}</div>
@@ -1870,17 +1791,9 @@ export default function App(){
                 ))}
               </div>
             )}
-            <button onClick={()=>setShowIn(x=>!x)} style={{
-              background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.2)",
-              color:"#fff",borderRadius:5,padding:"5px 12px",
-              fontSize:11,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"
-            }}>{showIn?"Hide Input":"New Analysis"}</button>
+            <button onClick={()=>setShowIn(x=>!x)} style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",borderRadius:5,padding:"5px 12px",fontSize:11,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"}}>{showIn?"Hide Input":"New Analysis"}</button>
             {results.length>0&&!running&&(
-              <button onClick={()=>exportToExcel(results)} style={{
-                background:"#fff",border:"none",color:C.red,
-                borderRadius:5,padding:"5px 12px",
-                fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"
-              }}>↓ Export</button>
+              <button onClick={()=>exportToExcel(results)} style={{background:"#fff",border:"none",color:C.red,borderRadius:5,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>↓ Export</button>
             )}
           </div>
         </div>
@@ -1890,78 +1803,39 @@ export default function App(){
       {showIn&&(
         <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"stretch"}}>
-
-            {/* Left: tabs + textarea/upload */}
             <div style={{borderRight:`1px solid ${C.border}`}}>
-              {/* Tab row */}
               <div style={{display:"flex",borderBottom:`1px solid ${C.border}`}}>
                 {[["manual","Manual Entry"],["file","File Upload"]].map(([id,l])=>(
-                  <button key={id} onClick={()=>setITab(id)} style={{
-                    padding:"8px 18px",border:"none",cursor:"pointer",
-                    fontSize:12,fontWeight:600,background:"transparent",
-                    color:iTab===id?C.red:C.mid,
-                    borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent"
-                  }}>{l}</button>
+                  <button key={id} onClick={()=>setITab(id)} style={{padding:"8px 18px",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:"transparent",color:iTab===id?C.red:C.mid,borderBottom:iTab===id?`2px solid ${C.red}`:"2px solid transparent"}}>{l}</button>
                 ))}
               </div>
-              {/* Input body */}
               <div style={{padding:"10px 16px",display:"flex",gap:12,alignItems:"center"}}>
                 {iTab==="manual"?(
                   <>
-                    <textarea
-                      value={txt}
-                      onChange={e=>setTxt(e.target.value)}
-                      rows={3}
+                    <textarea value={txt} onChange={e=>setTxt(e.target.value)} rows={3}
                       placeholder={"Apple Inc, AAPL\nMicrosoft, MSFT\nBabcock International, BAB"}
-                      style={{
-                        flex:1,borderRadius:5,border:`1px solid ${C.border}`,
-                        padding:"8px 12px",fontSize:13,
-                        color:C.ink,background:C.white,
-                        fontFamily:"'DM Sans',monospace",
-                        resize:"none",lineHeight:1.6
-                      }}
+                      style={{flex:1,borderRadius:5,border:`1px solid ${C.border}`,padding:"8px 12px",fontSize:13,color:C.ink,background:C.white,fontFamily:"'Inter',monospace",resize:"none",lineHeight:1.6}}
                     />
-                    <div style={{fontSize:12,color:C.mid,lineHeight:2,whiteSpace:"nowrap",flexShrink:0}}>
-                      One per line<br/>Name, TICKER<br/>Max 20
-                    </div>
+                    <div style={{fontSize:12,color:C.mid,lineHeight:2,whiteSpace:"nowrap",flexShrink:0}}>One per line<br/>Name, TICKER<br/>Max 20</div>
                   </>
                 ):(
                   <>
-                    <div
-                      onClick={()=>fRef.current.click()}
-                      style={{
-                        flex:1,border:`1.5px dashed #FECACA`,borderRadius:6,
-                        padding:"16px",textAlign:"center",cursor:"pointer",background:"#FEF2F2"
-                      }}
+                    <div onClick={()=>fRef.current.click()}
+                      style={{flex:1,border:`1.5px dashed #FECACA`,borderRadius:6,padding:"16px",textAlign:"center",cursor:"pointer",background:"#FEF2F2"}}
                       onMouseEnter={e=>e.currentTarget.style.borderColor=C.red}
                       onMouseLeave={e=>e.currentTarget.style.borderColor="#FECACA"}>
                       <div style={{fontSize:13,fontWeight:600,color:C.red,marginBottom:3}}>Upload CSV or Excel</div>
                       <div style={{fontSize:12,color:C.mid}}>.csv · .xlsx · .xls · .xlsm</div>
                       <input ref={fRef} type="file" accept=".csv,.xlsx,.xls,.xlsm" style={{display:"none"}} onChange={handleFile}/>
                     </div>
-                    {fileCos.length>0&&(
-                      <div style={{fontSize:13,color:C.ok,fontWeight:600,flexShrink:0}}>{fileCos.length} companies loaded</div>
-                    )}
+                    {fileCos.length>0&&<div style={{fontSize:13,color:C.ok,fontWeight:600,flexShrink:0}}>{fileCos.length} companies loaded</div>}
                   </>
                 )}
                 {err&&<div style={{fontSize:12,color:C.red,flexShrink:0}}>{err}</div>}
               </div>
             </div>
-
-            {/* Right: run button + progress */}
             <div style={{padding:"12px 16px",display:"flex",flexDirection:"column",justifyContent:"center",gap:8,minWidth:180,background:"#FAFAF8"}}>
-              <button
-                onClick={run}
-                disabled={running}
-                style={{
-                  padding:"11px 0",width:"100%",
-                  background:running?"#E8E5DF":C.red,
-                  color:running?C.mid:"#fff",
-                  border:"none",borderRadius:5,
-                  fontSize:14,fontWeight:700,
-                  cursor:running?"not-allowed":"pointer",
-                  boxShadow:running?"none":"0 2px 8px rgba(192,0,0,0.20)"
-                }}>
+              <button onClick={run} disabled={running} style={{padding:"11px 0",width:"100%",background:running?"#E8E5DF":C.red,color:running?C.mid:"#fff",border:"none",borderRadius:5,fontSize:14,fontWeight:700,cursor:running?"not-allowed":"pointer",boxShadow:running?"none":"0 2px 8px rgba(192,0,0,0.20)"}}>
                 {running?`Running ${prog.d}/${prog.t}…`:"Run Pipeline"}
               </button>
               {running&&(
@@ -1971,24 +1845,15 @@ export default function App(){
                 </div>
               )}
             </div>
-
           </div>
         </div>
       )}
 
       {/* ── MAIN 2-COL ── */}
       <div style={{flex:1,display:"grid",gridTemplateColumns:sorted.length?"260px 1fr":"1fr",overflow:"hidden",minHeight:0}}>
-
-        {/* Sidebar */}
         {sorted.length>0&&(
           <div style={{background:C.white,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            <div style={{
-              padding:"10px 14px",
-              borderBottom:`1px solid ${C.border}`,
-              background:C.white,
-              flexShrink:0,
-              display:"flex",justifyContent:"space-between",alignItems:"center"
-            }}>
+            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,background:C.white,flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:12,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:"0.08em"}}>{sorted.length} Companies</span>
               <span style={{fontSize:11,color:C.mid}}>by risk</span>
             </div>
@@ -1998,46 +1863,38 @@ export default function App(){
           </div>
         )}
 
-        {/* Detail / empty state */}
         <div style={{position:"relative",overflow:"hidden",display:"flex",flexDirection:"column",background:"#F8F9FA"}}>
           {selR?<Detail r={selR}/>:(
             <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
-              {sorted.length>0
-                ?(
-                  <>
-                    <div style={{fontSize:22,color:C.pale}}>←</div>
-                    <div style={{fontSize:12,color:C.mid}}>Select a company to view analysis</div>
-                  </>
-                ):(
-                  <div style={{textAlign:"center",maxWidth:500,padding:32}}>
-                    {/* Empty state icon — subtle pipeline nodes */}
-                    <svg width="56" height="56" viewBox="0 0 56 56" fill="none" style={{margin:"0 auto 18px",display:"block"}}>
-                      <rect width="56" height="56" rx="12" fill="#FEF2F2"/>
-                      <circle cx="14" cy="28" r="5" fill="#FECACA"/>
-                      <circle cx="28" cy="18" r="5" fill="#FCA5A5"/>
-                      <circle cx="28" cy="38" r="5" fill="#FCA5A5"/>
-                      <circle cx="42" cy="28" r="5" fill="#C00000"/>
-                      <line x1="19" y1="26" x2="23" y2="20" stroke="#FECACA" strokeWidth="1.5"/>
-                      <line x1="19" y1="30" x2="23" y2="36" stroke="#FECACA" strokeWidth="1.5"/>
-                      <line x1="33" y1="20" x2="37" y2="26" stroke="#FCA5A5" strokeWidth="1.5"/>
-                      <line x1="33" y1="36" x2="37" y2="30" stroke="#FCA5A5" strokeWidth="1.5"/>
-                    </svg>
-                    <div style={{fontSize:22,fontWeight:700,color:C.ink,marginBottom:8,letterSpacing:"-0.02em",fontFamily:"'DM Serif Display',serif"}}>
-                      CEO Succession Risk Analyzer
-                    </div>
-                    <div style={{fontSize:13,color:C.mid,lineHeight:1.8,marginBottom:22}}>
-                      6-agent self-correcting pipeline — CEO Scan · Profile Structuring · Finance · Press · Industry · Prediction
-                    </div>
-                    {!showIn&&(
-                      <button onClick={()=>setShowIn(true)} style={{
-                        padding:"11px 28px",background:C.red,color:"#fff",
-                        border:"none",borderRadius:5,fontSize:13,fontWeight:700,
-                        cursor:"pointer",boxShadow:"0 2px 12px rgba(163,0,0,0.28)"
-                      }}>Start Analysis</button>
-                    )}
+              {sorted.length>0?(
+                <>
+                  <div style={{fontSize:22,color:"#D4D0CB"}}>&#8592;</div>
+                  <div style={{fontSize:12,color:C.mid}}>Select a company to view analysis</div>
+                </>
+              ):(
+                <div style={{textAlign:"center",maxWidth:500,padding:32}}>
+                  <svg width="56" height="56" viewBox="0 0 56 56" fill="none" style={{margin:"0 auto 18px",display:"block"}}>
+                    <rect width="56" height="56" rx="12" fill="#FEF2F2"/>
+                    <circle cx="14" cy="28" r="5" fill="#FECACA"/>
+                    <circle cx="28" cy="18" r="5" fill="#FCA5A5"/>
+                    <circle cx="28" cy="38" r="5" fill="#FCA5A5"/>
+                    <circle cx="42" cy="28" r="5" fill="#C00000"/>
+                    <line x1="19" y1="26" x2="23" y2="20" stroke="#FECACA" strokeWidth="1.5"/>
+                    <line x1="19" y1="30" x2="23" y2="36" stroke="#FECACA" strokeWidth="1.5"/>
+                    <line x1="33" y1="20" x2="37" y2="26" stroke="#FCA5A5" strokeWidth="1.5"/>
+                    <line x1="33" y1="36" x2="37" y2="30" stroke="#FCA5A5" strokeWidth="1.5"/>
+                  </svg>
+                  <div style={{fontSize:22,fontWeight:700,color:C.ink,marginBottom:8,letterSpacing:"-0.02em"}}>
+                    CEO Succession Risk Analyzer
                   </div>
-                )
-              }
+                  <div style={{fontSize:13,color:C.mid,lineHeight:1.8,marginBottom:22}}>
+                    6-agent self-correcting pipeline — CEO Scan · Profile Structuring · Finance · Press · Industry · Prediction
+                  </div>
+                  {!showIn&&(
+                    <button onClick={()=>setShowIn(true)} style={{padding:"11px 28px",background:C.red,color:"#fff",border:"none",borderRadius:5,fontSize:13,fontWeight:700,cursor:"pointer",boxShadow:"0 2px 12px rgba(163,0,0,0.28)"}}>Start Analysis</button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
