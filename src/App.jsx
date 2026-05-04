@@ -1830,7 +1830,7 @@ export default function App(){
             </svg>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#fff",letterSpacing:"-0.02em",lineHeight:1.2}}>CEO Succession Risk Analyzer</div>
-              <div style={{fontSize:10.5,color:"rgba(255,255,255,0.65)",fontWeight:400}}>Bain &amp; Company · 8-agent pipeline</div>
+              <div style={{fontSize:10.5,color:"rgba(255,255,255,0.65)",fontWeight:400}}>Bain &amp; Company · 6-agent pipeline</div>
             </div>
           </div>
 
