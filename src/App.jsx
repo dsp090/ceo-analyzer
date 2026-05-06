@@ -30,8 +30,7 @@ const C = {
   warn:"#92400E", warnBg:"rgba(146,64,14,0.06)",
 };
 
-// ── FIXED: direct Portkey URL (no proxy needed) ───────────────────────────────
-const PORTKEY_URL = "/api/chat/completions"; // proxied via vite → portkey.bain.dev
+const PORTKEY_URL = "/api/chat/completions";
 const PORTKEY_KEY = "2bayMIyF+J3J0aJtcc4i1HvrfLAS";
 const MODEL       = "@ceo-coe/gpt-4o-search-preview";
 
@@ -62,20 +61,16 @@ function parseJSON(text, fallback={}) {
   try { const s=text.indexOf("{"),e=text.lastIndexOf("}")+1; return s!==-1?JSON.parse(text.slice(s,e)):fallback; } catch{ return fallback; }
 }
 
-// Normalise any revenue string to "$XXbn" USD format
-// Handles: €38.8bn, £5.2bn, ¥4.2tn, $391bn, $47.9bn, "47.9 billion", "391 billion USD"
 const FX = { "€":1.08, "£":1.27, "¥":0.0067, "￥":0.0067, "A$":0.65, "C$":0.73, "CHF":1.12, "kr":0.093 };
 function normaliseRevenue(s) {
   if(!s||ni(s)) return s;
   const raw = String(s).trim();
-  // Extract currency symbol
   let fx = 1;
   for(const [sym,rate] of Object.entries(FX)){
     if(raw.startsWith(sym)||raw.includes(" "+sym)){fx=rate;break;}
   }
-  // Extract numeric value
   const numMatch = raw.match(/([\d,.]+)\s*(trillion|tn|billion|bn|million|m|b)/i);
-  if(!numMatch) return raw; // can't parse, return as-is
+  if(!numMatch) return raw;
   const num = parseFloat(numMatch[1].replace(/,/g,""));
   const unit = numMatch[2].toLowerCase();
   let usdBn;
@@ -83,7 +78,6 @@ function normaliseRevenue(s) {
   else if(unit==="billion"||unit==="bn"||unit==="b") usdBn = num * fx;
   else if(unit==="million"||unit==="m") usdBn = num / 1000 * fx;
   else return raw;
-  // Format
   if(usdBn >= 1000) return `$${(usdBn/1000).toFixed(1)}tn`;
   if(usdBn >= 1)    return `$${usdBn.toFixed(1)}bn`;
   return `$${(usdBn*1000).toFixed(0)}m`;
@@ -109,7 +103,7 @@ async function callLLM(sys, usr, webSearch=false) {
   return d.choices?.[0]?.message?.content?.trim()||"";
 }
 
-// ── Financial Data Fetch — dedicated lookup for TSR, revenue, performance ────
+// ── Financial Data Fetch ──────────────────────────────────────────────────────
 async function fetchFinancialData(company, ticker) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
@@ -150,7 +144,7 @@ Give real numbers for any company you have knowledge of.`;
   }
 }
 
-// ── Agent 1: CEO News — dual-call strategy (web search + model knowledge) ────
+// ── Agent 1: CEO News ─────────────────────────────────────────────────────────
 async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
@@ -183,7 +177,6 @@ Examples of what to look for:
 
 ALWAYS check for successor announcements — this is the most important question like there is ceo annoucement for babcock ceo that is Harry Holt will be replacing David Lockwood and For apple Tim cook will step down and John Ternus will be the new ceo and PostNL has new ceo as well dont hallucinate deep dive dont miss edge cases like these these are some examples find similarly for other companies as well.`;
 
-  // Always make both calls — plugin may or may not fire, model knowledge always works
   const results = [];
   try {
     const r1 = await callLLM(sys, prompt, true);
@@ -195,7 +188,8 @@ ALWAYS check for successor announcements — this is the most important question
   } catch {}
   return results.length ? results.join("\n\n---\n\n") : `No data found for ${company}.`;
 }
-// ── Agent 2: Research — build full CEO profile from news + training data ──────
+
+// ── Agent 2: Research ─────────────────────────────────────────────────────────
 async function agentResearch(company, ticker, webCtx) {
   const today = new Date().toDateString();
   const fallback = {
@@ -250,6 +244,8 @@ SUCCESSOR DETECTION — HIGHEST PRIORITY:
 
 DEPARTURE DETECTION:
 - If context says CEO is stepping down, retiring, leaving, or not seeking re-election → ceo_departure_announced="yes"
+- IMPORTANT: Also set ceo_departure_announced="yes" if the context describes a CEO who HAS ALREADY left/departed
+  and a new CEO is now in place — the departure still happened even if it is past tense.
 
 CURRENT CEO:
 - Keep current CEO in ceo_name until their successor has actually STARTED
@@ -259,7 +255,8 @@ MAPPING RULES — extract from the news context above:
 
 ► ceo_departure_announced
   Set "yes" if the news mentions: CEO stepping down / retiring / leaving / being replaced / departure announced
-  Set "no" otherwise
+  Set "yes" also if a NEW CEO has recently taken over (implying the previous CEO departed)
+  Set "no" only if there is no indication of any departure whatsoever
 
 ► incoming_ceo_announced + incoming_ceo_name
   Set "yes" if ANY specific person is named as the next/incoming/replacement CEO
@@ -346,7 +343,14 @@ CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST us
   const computed = calcTenure(d.ceo_start_date);
   if (computed) d.ceo_tenure_years = computed;
 
-  // ── Embedded QC: verify CEO name + successor against model knowledge ───────
+  // ── FIX 1: Snapshot the CEO name BEFORE QC can mutate it ─────────────────
+  // This is the name that rationale strings must use — it reflects who the
+  // research agent identified as the current/departing CEO from the news context.
+  // QC may later correct ceo_name to a different value, but rationale was
+  // written against this person.
+  d._ceo_name_pre_qc = d.ceo_name;
+
+  // ── Embedded QC: verify CEO name + successor against model knowledge ──────
   try {
     const qcRaw = await callLLM(
       `You are a QC analyst. Today is ${today}. Verify the CEO profile data below with your training knowledge. Return ONLY valid JSON.`,
@@ -371,9 +375,17 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
     d._profile_qc = "verified";
   } catch { d._profile_qc = "skipped"; }
 
+  // ── FIX 1 continued: if QC changed ceo_name, also flag previous CEO ───────
+  // _ceo_name_pre_qc holds the research-stage name (the one the news context
+  // described as departing/current). Keep it unchanged so rationale strings
+  // always reference the person the departure signals actually apply to.
+  // If QC corrected to the NEW CEO (transition already complete), the pre-QC
+  // name is the departing CEO — exactly who belongs in the rationale.
+
   return d;
 }
-// ── Agent 3: Finance (deep dive) ─────────────────────────────────────────────
+
+// ── Agent 3: Finance ──────────────────────────────────────────────────────────
 async function agentFinance(data) {
   const fallback={
     view:"no_clear_influence", financial_facts:[], signals:[], concerns:[],
@@ -440,7 +452,6 @@ Return ONLY this JSON — all fields required, USD billions, no "not available":
                    "margin_trend","net_income","ebitda","analyst_view","key_risk"])
     r[f] = cl(r[f]||"not clearly inferable", 20)||"not clearly inferable";
 
-  // ── Embedded QC: sanity-check revenue figure ──────────────────────────────
   try {
     if (r.revenue && !ni(r.revenue)) {
       const chkRaw = await callLLM(
@@ -458,7 +469,8 @@ Return: {"plausible":true/false,"correct_revenue":"","tsr_1yr_plausible":true/fa
 
   return r;
 }
-// ── Agent 4: Press & Activism (deep dive) ───────────────────────────────────
+
+// ── Agent 4: Press & Activism ─────────────────────────────────────────────────
 async function agentPress(data) {
   const fallback = {
     view:"no_clear_influence", signals:[], concerns:[],
@@ -497,14 +509,9 @@ Return this JSON:
 }
 
 view: high_influence | medium_influence | weak_influence | no_clear_influence
-  • high_influence: active named activist with CEO change demand, regulatory probe, proxy battle, major scandal
-  • medium_influence: proxy advisor criticism, compensation controversy, governance concerns from named investor
-  • weak_influence: one-off press criticism, minor governance question
-  • no_clear_influence: no notable external pressure found
-
-signals: up to 4 items — SPECIFIC and NAMED e.g. "Elliott Management disclosed 8.5% stake Nov 2023 demanding strategic review", "ISS recommended against CEO pay package at 2024 AGM"
+signals: up to 4 items — SPECIFIC and NAMED
 concerns: up to 3 concrete external pressure risks
-controversies: up to 4 named events — lawsuits, regulatory probes, activist letters, public disputes
+controversies: up to 4 named events
 investor_activism: full summary of any named activist position and demands, or "None identified"
 
 ⚠ CRITICAL: Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`
@@ -512,21 +519,18 @@ investor_activism: full summary of any named activist position and demands, or "
 
   const r = parseJSON(raw, fallback);
   r.view = cl(r.view||"no_clear_influence", 3);
-  // Normalise — flatten any objects to strings before processing
   const toStr = arr => (Array.isArray(arr)?arr:[]).map(x => typeof x === "object" ? JSON.stringify(x) : String(x||"")).filter(Boolean);
   r.signals      = lst(toStr(r.signals), 4, 25);
   r.concerns     = lst(toStr(r.concerns), 3, 25);
   r.controversies= lst(toStr(r.controversies), 4, 25);
   r.investor_activism = cl(r.investor_activism||"None identified", 20)||"None identified";
 
-  // Strip boilerplate
   const generic = ["typical for","no credible","no major","not identified","no report","governance scrutiny","generally","standard"];
   const isGeneric = s => generic.some(p => s.toLowerCase().includes(p));
   r.signals      = r.signals.filter(s => !isGeneric(s));
   r.concerns     = r.concerns.filter(s => !isGeneric(s));
   r.controversies= r.controversies.filter(s => !isGeneric(s));
 
-  // ── Embedded QC: verify any named activist is real ────────────────────────
   try {
     if (r.signals.length > 0 || r.investor_activism !== "None identified") {
       const chkRaw = await callLLM(
@@ -549,6 +553,7 @@ Return: {"all_specific":true/false,"generic_items":[],"confirmed_activist":""}`
 
   return r;
 }
+
 // ── Agent 5: Industry ─────────────────────────────────────────────────────────
 async function agentIndustry(data) {
   const fallback = { view:"no_clear_influence", signals:data.industry_signals||[], concerns:[] };
@@ -565,7 +570,7 @@ Return:
 {"view":"","signals":[],"concerns":[]}
 
 view: high_influence | medium_influence | weak_influence | no_clear_influence
-signals: up to 3 SPECIFIC industry dynamics affecting this CEO's tenure (e.g. "AI disruption forcing strategic pivot", "Regulatory pressure on advertising model")
+signals: up to 3 SPECIFIC industry dynamics affecting this CEO's tenure
 concerns: up to 2 specific risks
 ⚠ Be specific to this company and sector — no generic observations.`
   );
@@ -575,7 +580,6 @@ concerns: up to 2 specific risks
   r.signals  = lst(r.signals, 3, 20);
   r.concerns = lst(r.concerns, 2, 20);
 
-  // ── Embedded QC: strip generic industry signals ───────────────────────────
   const genericInd = ["challenging","headwinds","digital","evolving","uncertain","competitive pressure"];
   r.signals = r.signals.filter(s => !genericInd.some(g => s.toLowerCase() === g.toLowerCase()));
   r._industry_qc = r.signals.length > 0 ? "specific" : "generic-removed";
@@ -583,27 +587,30 @@ concerns: up to 2 specific risks
   return r;
 }
 
-// ── Agent 6: Prediction — final board-ready risk verdict ─────────────────────
+// ── Agent 6: Prediction ───────────────────────────────────────────────────────
 async function agentPrediction(data, finance, press, industry) {
   const fallback = { prediction:"low_likelihood", confidence:"low", analytical_rationale:"" };
 
-  // ── HARD CODE OVERRIDES — no LLM needed, answer is deterministic ─────────
+  // ── FIX 1: Use pre-QC name for all rationale strings ─────────────────────
+  // _ceo_name_pre_qc is the name the research agent found in the news context
+  // for the departing/current CEO. QC may have updated ceo_name to the new CEO
+  // who has already taken over — but the rationale about departure/succession
+  // must reference whoever the departure signals actually belong to.
+  const rationaleCEO = data._ceo_name_pre_qc || data.ceo_name;
+
   const isFamily = ["founder_ceo","family_ceo","founder_family_control_non_ceo"].includes(data.ownership_category);
 
-  // Rule 1: Family/founder CEO → ALWAYS Low unless there is solid hard proof of change
-  // Solid proof means: formal departure announcement OR confirmed incoming CEO
-  // Activist investors, press signals, TSR underperformance — none of these override the family rule
-  // Only a publicly confirmed departure or named successor can change this
   const solidProofOfChange = (
     data.ceo_departure_announced === "yes" ||
     data.incoming_ceo_announced === "yes"
   );
 
+  // Rule 1: Family/founder CEO — structurally low unless hard proof of change
   if (isFamily && !solidProofOfChange) {
     return {
       prediction: "low_likelihood",
       confidence: "high",
-      analytical_rationale: `${data.ceo_name} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance. Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
+      analytical_rationale: `${rationaleCEO} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance. Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
     };
   }
 
@@ -615,7 +622,7 @@ async function agentPrediction(data, finance, press, industry) {
     return {
       prediction: "transition_underway",
       confidence: "high",
-      analytical_rationale: `${data.ceo_name} has formally announced departure. Named successor: ${succ}${bg}.${dt} The CEO transition is confirmed and actively underway. Investors should monitor strategic continuity under incoming leadership.`
+      analytical_rationale: `${rationaleCEO} has formally announced departure. Named successor: ${succ}${bg}.${dt} The CEO transition is confirmed and actively underway. Investors should monitor strategic continuity under incoming leadership.`
     };
   }
 
@@ -624,11 +631,11 @@ async function agentPrediction(data, finance, press, industry) {
     return {
       prediction: "high_likelihood",
       confidence: "high",
-      analytical_rationale: `${data.ceo_name} has formally announced departure from ${data.sector||"the company"}. A successor has not yet been publicly named. A CEO change is confirmed — timing and successor identity remain uncertain. This represents elevated transition risk for investors.`
+      analytical_rationale: `${rationaleCEO} has formally announced departure from ${data.sector||"the company"}. A successor has not yet been publicly named. A CEO change is confirmed — timing and successor identity remain uncertain. This represents elevated transition risk for investors.`
     };
   }
 
-  // Rule 4: Incoming CEO already announced (even without formal departure) → Transition Underway
+  // Rule 4: Incoming CEO announced even without formal departure → Transition Underway
   if (data.incoming_ceo_announced === "yes") {
     const succ = data.incoming_ceo_name && data.incoming_ceo_name !== "N/A" ? data.incoming_ceo_name : "a named successor";
     const bg   = data.incoming_ceo_background && data.incoming_ceo_background !== "N/A" ? ` (${data.incoming_ceo_background})` : "";
@@ -641,11 +648,31 @@ async function agentPrediction(data, finance, press, industry) {
 
   // Rule 5: Very short tenure → New CEO recently appointed
   const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
+
   if (!isNaN(tenureNum) && tenureNum < 1.0) {
     return {
       prediction: "new_ceo_appointed",
       confidence: "high",
-      analytical_rationale: `${data.ceo_name} was recently appointed as CEO with only ${data.ceo_tenure_years} years in the role. This reflects a recent leadership change at the company. Succession risk is currently low given the fresh appointment.`
+      analytical_rationale: `${rationaleCEO} was recently appointed as CEO with only ${data.ceo_tenure_years} years in the role. This reflects a recent leadership change at the company. Succession risk is currently low given the fresh appointment.`
+    };
+  }
+
+  // ── FIX 2: Rule 5b — departure happened and new CEO is now in seat ────────
+  // Catches the case where:
+  //   - The previous CEO's departure was announced (ceo_departure_announced="yes")
+  //   - But the new CEO is already in the role (short tenure, QC corrected ceo_name)
+  //   - incoming_ceo_announced was never set to "yes" because the transition is done
+  // Without this rule the pipeline falls through to the LLM scorer which sees
+  // "departure announced" signals and rates it high_likelihood — wrong.
+  // The threshold is 1.5yr to absorb imprecise start-date calculations.
+  if (data.ceo_departure_announced === "yes" && !isNaN(tenureNum) && tenureNum < 1.5) {
+    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+      ? data._ceo_name_pre_qc
+      : "The previous CEO";
+    return {
+      prediction: "new_ceo_appointed",
+      confidence: "high",
+      analytical_rationale: `${departedCEO} formally announced departure and a leadership transition has since completed. ${rationaleCEO} is the newly appointed CEO with ${data.ceo_tenure_years} years in the role. Succession risk is currently low — the board has resolved the transition.`
     };
   }
 
@@ -728,7 +755,7 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
   r.analytical_rationale = cl(r.analytical_rationale||"", 80);
   r.investor_impact      = cl(r.investor_impact||"", 8);
 
-  // ── Embedded Challenge: argue against and auto-revise if needed ───────────
+  // ── Embedded Challenge ────────────────────────────────────────────────────
   try {
     const chalRaw = await callLLM(
       `You are a devil's advocate. Challenge the prediction below — find the strongest reason it could be wrong. Return ONLY valid JSON.`,
@@ -756,7 +783,8 @@ Return: {"should_revise":false,"revised_prediction":"","revised_confidence":"","
 
   return r;
 }
-// ── Agent 7: Validation & QC ─────────────────────────────────────────────────
+
+// ── Agent 7: Validation & QC ──────────────────────────────────────────────────
 async function agentValidation(company, ticker, data, finance, press, pred) {
   const today = new Date().toDateString();
   const fallback = {
@@ -796,21 +824,14 @@ Prediction: ${pred.prediction}  |  Confidence: ${pred.confidence}
 
 ━━━ VERIFICATION TASKS ━━━
 1. CEO NAME: Is "${data.ceo_name}" actually the current CEO of ${company} as of ${today}?
-   - Cross-check against your most recent knowledge of CEO changes.
-   - If a new CEO has already started, flag the old name as "incorrect".
-
-2. SUCCESSOR CHECK (CRITICAL): Has ${company} publicly announced a named successor/incoming CEO?
-   - Search your full knowledge for any named successor announcement for this specific company.
-   - Look for: board announcements, press releases, regulatory filings, news articles naming a specific person.
-   - If a named successor exists and incoming_ceo_name is "N/A", flag it and provide the correct name.
-3. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}? Is this plausible?
-4. TSR: Are the TSR figures (${data.tsr_1yr}, ${data.tsr_3yr}) plausible for ${company} in the current period?
-5. REVENUE: Is ${data.revenue} a plausible revenue figure for ${company}?
-6. ACTIVIST: Is the activist investor data (${data.activist_investors}) accurate to your knowledge?
-7. PREDICTION: Given everything you know about ${company}, does the prediction of ${pred.prediction} seem reasonable?
-   - If a successor has been named but incoming_ceo_announced is "no", the prediction should be "transition_underway".
-8. MISSING DATA: Which important fields are blank or "not clearly inferable" that should have data?
-9. COMPANY IDENTITY: Is this actually ${company} or could the model have confused it with another company?
+2. SUCCESSOR CHECK: Has ${company} publicly announced a named successor/incoming CEO?
+3. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}?
+4. TSR: Are the TSR figures plausible?
+5. REVENUE: Is ${data.revenue} plausible?
+6. ACTIVIST: Is the activist investor data accurate?
+7. PREDICTION: Does the prediction of ${pred.prediction} seem reasonable?
+8. MISSING DATA: Which important fields are blank or "not clearly inferable"?
+9. COMPANY IDENTITY: Is this actually ${company}?
 
 Return this JSON:
 {
@@ -835,12 +856,7 @@ Return this JSON:
   "flags": [],
   "data_completeness_score": 0,
   "qc_summary": ""
-}
-
-missing_critical_fields: list fields that returned "not clearly inferable" but should be available
-flags: list any specific concerns e.g. "CEO name appears to be from a different company", "TSR figures seem inconsistent"
-data_completeness_score: 0-100, how complete is the data overall
-qc_summary: 2-3 sentence plain English summary of data quality and any concerns`
+}`
   );
 
   const r = parseJSON(raw, fallback);
@@ -851,7 +867,7 @@ qc_summary: 2-3 sentence plain English summary of data quality and any concerns`
   return r;
 }
 
-// ── Agent 8: Challenge — argues AGAINST the prediction to find weaknesses ────
+// ── Agent 8: Challenge ────────────────────────────────────────────────────────
 async function agentChallenge(company, data, pred, finance, press) {
   const today = new Date().toDateString();
   const fallback = {
@@ -879,22 +895,6 @@ Finance view: ${finance.view}
 Press view: ${press.view}
 Rationale given: ${pred.analytical_rationale}
 
-━━━ YOUR TASKS ━━━
-
-STEP 1 — ARGUE AGAINST THE PREDICTION:
-What specific evidence or facts CONTRADICT the prediction of "${pred.prediction}"?
-- If predicted High: what retention signals, contract renewals, or strong performance data suggest LOW risk?
-- If predicted Low: what age, tenure, performance, or activist signals suggest HIGHER risk?
-- If predicted Transition: is there any evidence the transition might not happen?
-
-STEP 2 — WHAT WAS MISSED?
-What important context about ${company} and ${data.ceo_name} might the research have missed?
-Think about: board dynamics, peer comparisons, sector norms, recent news, contract details.
-
-STEP 3 — SHOULD THE PREDICTION BE REVISED?
-Given the challenges above, is the original prediction still the best call?
-Or should it be revised up or down?
-
 Return this JSON:
 {
   "challenge_points": [],
@@ -903,14 +903,7 @@ Return this JSON:
   "should_revise": false,
   "revised_prediction": "",
   "challenge_summary": ""
-}
-
-challenge_points: up to 4 specific reasons the prediction COULD BE WRONG — cite actual facts
-overriding_factors: up to 3 reasons the original prediction is STILL correct despite challenges
-revised_confidence: "high" | "medium" | "low" — how confident after challenge
-should_revise: true if the prediction should change, false if it holds
-revised_prediction: the prediction after challenge — can be same or different
-challenge_summary: 2-3 sentences summarising the challenge and final verdict`
+}`
   );
 
   const r = parseJSON(raw, fallback);
@@ -926,43 +919,33 @@ challenge_summary: 2-3 sentences summarising the challenge and final verdict`
 // ── Full pipeline ─────────────────────────────────────────────────────────────
 async function runPipeline(company, ticker, log) {
 
-  // ── STEP 1: CEO Scan ──────────────────────────────────────────────────────
   log(p=>[...p,`[${company}] 1/6 CEO Scan — searching live news + model knowledge...`]);
   const webCtx = await fetchCEONews(company);
   const finCtx = await fetchFinancialData(company, ticker);
 
-  // ── STEP 2: Profile Structuring + QC ─────────────────────────────────────
   log(p=>[...p,`[${company}] 2/6 Profile Structuring — building CEO profile...`]);
   const data = await agentResearch(company, ticker, webCtx + "\n\nFINANCIAL DATA:\n" + finCtx);
-  // QC runs inside agentResearch — log its outcome
   if(data._profile_qc === "verified")
-    log(p=>[...p,`[${company}]     ✓ Profile QC passed — CEO: ${data.ceo_name}${data.incoming_ceo_announced==="yes"?" · Successor: "+data.incoming_ceo_name:""}`]);
+    log(p=>[...p,`[${company}]     ✓ Profile QC passed — CEO: ${data.ceo_name}${data.incoming_ceo_announced==="yes"?" · Successor: "+data.incoming_ceo_name:""}${data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name ? " · Departed: "+data._ceo_name_pre_qc : ""}`]);
   if(data.ceo_departure_announced==="yes")
-    log(p=>[...p,`[${company}]     ⚠ Departure announced`]);
+    log(p=>[...p,`[${company}]     ⚠ Departure announced — departing CEO: ${data._ceo_name_pre_qc || data.ceo_name}`]);
 
-  // ── STEP 3: Finance + QC ─────────────────────────────────────────────────
   log(p=>[...p,`[${company}] 3/6 Finance — analysing revenue, TSR, margins...`]);
   const finance = await agentFinance(data);
-  // QC runs inside agentFinance — finance.revenue is already corrected if needed
   if(finance._finance_qc === "verified")
     log(p=>[...p,`[${company}]     ✓ Finance QC passed — Revenue: ${finance.revenue} · TSR 1yr: ${finance.tsr_1yr}`]);
 
-  // ── STEP 4: Press + QC ───────────────────────────────────────────────────
   log(p=>[...p,`[${company}] 4/6 Press — scanning activism, controversies, probes...`]);
   const press = await agentPress(data);
   if(press._press_qc === "verified")
     log(p=>[...p,`[${company}]     ✓ Press QC passed — ${press.signals.length} verified signals`]);
 
-  // ── STEP 5: Industry + QC ────────────────────────────────────────────────
   log(p=>[...p,`[${company}] 5/6 Industry — assessing sector dynamics...`]);
   const industry = await agentIndustry(data);
   log(p=>[...p,`[${company}]     ✓ Industry QC — ${industry.signals.length} specific signals (generic removed)`]);
 
-  // ── STEP 6: Prediction + Self-Challenge ──────────────────────────────────
-  // All QC-verified outputs feed into Prediction
   log(p=>[...p,`[${company}] 6/6 Prediction — scoring with all verified agent outputs...`]);
   const pred = await agentPrediction(data, finance, press, industry);
-  // Self-challenge runs inside agentPrediction
   if(pred._challenge === "revised")
     log(p=>[...p,`[${company}]     ⚡ Self-challenge revised prediction → ${pred.prediction}`]);
   else
@@ -984,7 +967,7 @@ async function runPipeline(company, ticker, log) {
     flags: [],
     missing_critical_fields: [],
     data_completeness_score: data._profile_qc === "verified" ? 90 : 75,
-    qc_summary: `Profile QC: ${data._profile_qc||"skipped"}. Finance QC: ${finance._finance_qc||"skipped"}. Press QC: ${press._press_qc||"skipped"}. Prediction: ${pred._challenge||"skipped"}.`,
+    qc_summary: `Profile QC: ${data._profile_qc||"skipped"}. Finance QC: ${finance._finance_qc||"skipped"}. Press QC: ${press._press_qc||"skipped"}. Prediction: ${pred._challenge||"skipped"}. Pre-QC CEO: ${data._ceo_name_pre_qc||"same"}.`,
   };
   const challenge = {
     challenge_points: [],
@@ -1001,6 +984,8 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
+    // ── FIX 1: expose pre-QC name in output for display/export ───────────────
+    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name) ? data._ceo_name_pre_qc : "",
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
     revenue:normaliseRevenue(finance.revenue||data.revenue),
     revenue_growth:finance.revenue_growth||"",
@@ -1013,7 +998,6 @@ async function runPipeline(company, ticker, log) {
     analyst_view:finance.analyst_view||"",
     key_risk:finance.key_risk||"",
     financial_summary:Array.isArray(finance.financial_facts)?finance.financial_facts.filter(Boolean).join(" | "):String(finance.financial_facts||""),
-    // TSR: prefer finance agent enrichment over research agent (finance does deeper lookup)
     tsr_1yr:   (finance.tsr_1yr   &&!finance.tsr_1yr.includes("inferable"))   ? finance.tsr_1yr   : data.tsr_1yr,
     tsr_3yr:   (finance.tsr_3yr   &&!finance.tsr_3yr.includes("inferable"))   ? finance.tsr_3yr   : data.tsr_3yr,
     tsr_vs_peers:(finance.tsr_vs_peers&&!finance.tsr_vs_peers.includes("inferable"))? finance.tsr_vs_peers: data.tsr_vs_peers,
@@ -1022,28 +1006,23 @@ async function runPipeline(company, ticker, log) {
     board_refreshed_2yr:data.board_refreshed_2yr, activist_investors:data.activist_investors,
     press_controversies:joinCompact(press.controversies," | ",30),
     investor_activism:press.investor_activism, mandate_signals:data.mandate_signals,
-    // Signals — from distinct agent sources
     key_risks: lst(data.press_activism_signals, 4, 25),
     mitigating_factors: lst(finance.signals.length>0 ? finance.signals : [], 3, 25),
     succession_signals: lst(data.leadership_signals, 4, 20),
-    // Raw agent signals
-    leadership_signals: data.leadership_signals,  // research agent — richest contextual signals
+    leadership_signals: data.leadership_signals,
     financial_signals: data.financial_signals,
     press_signals:press.signals, industry_signals:industry.signals,
     finance_view:finance.view, press_view:press.view, industry_view:industry.view,
     finance_concerns:finance.concerns, press_concerns:press.concerns, industry_concerns:industry.concerns,
-    // Extra insight fields
     performance_trajectory:data.performance_trajectory||"",
     m_and_a_activity:data.m_and_a_activity||"",
     regulatory_scrutiny:data.regulatory_scrutiny||"",
     investor_impact:pred.investor_impact||"",
     successor_found_by_validation: validation.successor_found||false,
-    // Challenge agent
     challenge_points:     challenge.challenge_points||[],
     overriding_factors:   challenge.overriding_factors||[],
     challenge_summary:    challenge.challenge_summary||"",
     prediction_revised:   challenge.should_revise||false,
-    // Validation & QC
     validation_ceo:       validation.ceo_name_verified||"unverified",
     validation_ceo_note:  validation.ceo_name_note||"",
     validation_tsr:       validation.tsr_verified||"unverified",
@@ -1059,7 +1038,7 @@ async function runPipeline(company, ticker, log) {
   };
 }
 
-// ── Export to Excel ──────────────────────────────────────────────────────────
+// ── Export to CSV ─────────────────────────────────────────────────────────────
 function exportToExcel(results) {
   const PRED_LABEL_MAP = {
     new_ceo_appointed:"New CEO Appointed", transition_underway:"Transition Underway",
@@ -1073,6 +1052,7 @@ function exportToExcel(results) {
     { key:"sector",               label:"Sector"                         },
     { key:"ownership_category",   label:"Ownership Type"                 },
     { key:"ceo_name",             label:"CEO Name"                       },
+    { key:"departed_ceo_name",    label:"Departed CEO Name"              },
     { key:"ceo_age",              label:"CEO Age"                        },
     { key:"ceo_start_date",       label:"CEO Start Date"                 },
     { key:"ceo_tenure_years",     label:"CEO Tenure (Years)"             },
@@ -1110,21 +1090,21 @@ function exportToExcel(results) {
     { key:"finance_concerns",     label:"Finance Concerns",    fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"press_concerns",       label:"Press Concerns",      fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"industry_concerns",    label:"Industry Concerns",   fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"qc_score",              label:"QC Completeness Score"                },
-    { key:"qc_summary",            label:"QC Summary"                           },
-    { key:"validation_ceo",        label:"CEO Name Verified"                    },
-    { key:"validation_ceo_note",   label:"CEO Verification Note"                },
-    { key:"validation_tsr",        label:"TSR Verified"                         },
-    { key:"validation_tsr_note",   label:"TSR Note"                             },
-    { key:"validation_revenue",    label:"Revenue Verified"                     },
-    { key:"validation_prediction", label:"Prediction QC"                        },
-    { key:"validation_prediction_note", label:"Prediction QC Note"              },
-    { key:"validation_company",    label:"Company Identity Check"               },
+    { key:"qc_score",              label:"QC Completeness Score"         },
+    { key:"qc_summary",            label:"QC Summary"                    },
+    { key:"validation_ceo",        label:"CEO Name Verified"             },
+    { key:"validation_ceo_note",   label:"CEO Verification Note"         },
+    { key:"validation_tsr",        label:"TSR Verified"                  },
+    { key:"validation_tsr_note",   label:"TSR Note"                      },
+    { key:"validation_revenue",    label:"Revenue Verified"              },
+    { key:"validation_prediction", label:"Prediction QC"                 },
+    { key:"validation_prediction_note", label:"Prediction QC Note"       },
+    { key:"validation_company",    label:"Company Identity Check"        },
     { key:"validation_flags",      label:"QC Flags",  fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"validation_missing",    label:"Missing Fields", fmt: v => Array.isArray(v)?v.join(", "):v },
     { key:"challenge_points",      label:"Challenge Points",    fmt: v => Array.isArray(v)?v.join(" | "):v },
     { key:"overriding_factors",    label:"Overriding Factors",  fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"challenge_summary",     label:"Challenge Summary"                        },
+    { key:"challenge_summary",     label:"Challenge Summary"             },
     { key:"prediction_revised",    label:"Prediction Revised?", fmt: v => v?"Yes":"No" },
   ];
 
@@ -1282,7 +1262,6 @@ function Detail({r}){
   return(
     <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
 
-      {/* ── Header ── clean white with red left border accent */}
       <div style={{
         background:C.white,
         borderBottom:`1px solid ${C.border}`,
@@ -1324,6 +1303,13 @@ function Detail({r}){
           ))}
         </div>
 
+        {/* Show departed CEO name when QC corrected to new CEO */}
+        {r.departed_ceo_name&&(
+          <div style={{marginBottom:6,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:5,padding:"6px 12px",fontSize:11,color:"#92400E"}}>
+            Departed CEO: <strong>{r.departed_ceo_name}</strong> · Succeeded by: <strong>{r.ceo_name}</strong>
+          </div>
+        )}
+
         {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"&&(
           <div style={{marginBottom:10,background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:5,padding:"7px 12px",fontSize:12,display:"flex",alignItems:"center",gap:8}}>
             <span style={{color:"#15803D",fontWeight:700,fontSize:11}}>SUCCESSOR</span>
@@ -1332,14 +1318,14 @@ function Detail({r}){
             {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"&&<span style={{color:C.muted}}> · Starts: {r.incoming_ceo_start_date}</span>}
           </div>
         )}
-        {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&(
+        {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&!r.departed_ceo_name&&(
           <div style={{marginBottom:10,background:C.redBg,border:"1px solid #FECACA",borderRadius:5,padding:"6px 12px",fontSize:11,color:C.redD}}>
             ⚠ CEO departure announced — successor not yet named
           </div>
         )}
       </div>
 
-      {/* ── Tabs ── */}
+      {/* Tabs */}
       <div style={{display:"flex",background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0,overflowX:"auto"}}>
         {TABS.map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{
@@ -1352,7 +1338,7 @@ function Detail({r}){
         ))}
       </div>
 
-      {/* ── Content ── */}
+      {/* Content — unchanged from original */}
       <div style={{flex:1,overflowY:"auto",background:C.surfaceAlt,padding:"16px 18px"}}>
 
         {tab==="overview"&&(
@@ -1383,7 +1369,11 @@ function Detail({r}){
             {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&(
               <div style={{background:C.redBg,border:`1px solid #FECACA`,borderRadius:7,padding:"12px 15px",marginBottom:10}}>
                 <SH>CEO Transition Alert</SH>
-                {r.ceo_departure_announced==="yes"&&<div style={{fontSize:13,color:C.redD,marginBottom:4}}>⚠ Departure announced: <strong>{r.ceo_name}</strong> is leaving.</div>}
+                {r.ceo_departure_announced==="yes"&&(
+                  <div style={{fontSize:13,color:C.redD,marginBottom:4}}>
+                    ⚠ Departure announced: <strong>{r.departed_ceo_name || r.ceo_name}</strong> is leaving.
+                  </div>
+                )}
                 {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"
                   ?<div style={{fontSize:13,color:C.redD}}>✓ Successor named: <strong>{r.incoming_ceo_name}</strong>{r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}{r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` · Starts: ${r.incoming_ceo_start_date}`:""}</div>
                   :r.incoming_ceo_announced==="yes"&&<div style={{fontSize:13,color:C.redD}}>Successor not yet publicly named.</div>
@@ -1464,6 +1454,7 @@ function Detail({r}){
           <div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
               <KV label="CEO Name" val={r.ceo_name}/>
+              {r.departed_ceo_name&&<KV label="Departed CEO" val={r.departed_ceo_name}/>}
               <KV label="Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
               <KV label="Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
               <KV label="Start Date" val={!ni(r.ceo_start_date)?r.ceo_start_date:""}/>
@@ -1663,7 +1654,7 @@ function CRow({r,idx,sel,onClick}){
         <div style={{width:24,height:24,borderRadius:5,background:isH?"rgba(192,0,0,0.08)":"#F3F4F6",color:isH?C.red:C.mid,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{idx+1}</div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:13,color:sel?C.red:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.company}</div>
-          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.ceo_name||"—"}{r.ceo_tenure_years?` · ${r.ceo_tenure_years}yr`:""}</div>
+          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.ceo_name||"—"}{r.ceo_tenure_years?` · ${r.ceo_tenure_years}yr`:""}{r.departed_ceo_name?` · prev: ${r.departed_ceo_name}`:""}</div>
         </div>
         <PredBadge pred={r.prediction} sm/>
       </div>
@@ -1735,7 +1726,7 @@ export default function App(){
         if(i===0) setSel(0);
       }catch(e){
         setLogs(p=>[...p,`[${company}] ERROR: ${e.message}`]);
-        out.push({company:cl(company,8),ticker:cl(ticker||"",6),prediction:"error",confidence:"low",analytical_rationale:"Error: "+e.message,ceo_name:"",ceo_tenure_years:"",leadership_signals:[],financial_signals:[],press_signals:[],industry_signals:[],finance_concerns:[],press_concerns:[],industry_concerns:[]});
+        out.push({company:cl(company,8),ticker:cl(ticker||"",6),prediction:"error",confidence:"low",analytical_rationale:"Error: "+e.message,ceo_name:"",departed_ceo_name:"",ceo_tenure_years:"",leadership_signals:[],financial_signals:[],press_signals:[],industry_signals:[],finance_concerns:[],press_concerns:[],industry_concerns:[]});
         setResults([...out]);
       }
       setProg({d:i+1,t:cos.length});
@@ -1751,7 +1742,7 @@ export default function App(){
   return(
     <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column",background:"#F5F4F0",fontFamily:"'Inter',system-ui,sans-serif",overflow:"hidden"}}>
 
-      {/* ── NAV ── */}
+      {/* NAV */}
       <div style={{background:C.red,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 24px",height:54,gap:16}}>
           <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
@@ -1769,12 +1760,12 @@ export default function App(){
 
           <div style={{display:"flex",gap:3,flexWrap:"nowrap",flex:1,justifyContent:"center"}}>
             {[
-              ["CEO Scan",          "Searches live web + model knowledge for CEO appointments, departures and named successors · Self-corrects if results are thin or contradictory"],
-              ["Profile Structuring","Builds full CEO profile: name, age, tenure, ownership, succession flags · Embedded QC verifies CEO name, successor and ownership against model knowledge"],
-              ["Finance",           "Analyses revenue vs peers, TSR, margins and analyst sentiment · Embedded QC sanity-checks all figures against training knowledge"],
-              ["Press",             "Identifies activist investors, proxy advisor criticism and regulatory probes · Embedded QC strips generic or unverifiable claims"],
-              ["Industry",          "Assesses sector disruption, M&A dynamics and competitive pressures · Embedded QC removes generic signals not specific to this company"],
-              ["Prediction",        "Applies hard rules then LLM scoring for a board-ready verdict · Embedded self-challenge argues against and auto-revises if evidence is stronger"],
+              ["CEO Scan",          "Searches live web + model knowledge for CEO appointments, departures and named successors"],
+              ["Profile Structuring","Builds full CEO profile with embedded QC — snapshots CEO name before QC mutation"],
+              ["Finance",           "Analyses revenue vs peers, TSR, margins — embedded QC sanity-checks all figures"],
+              ["Press",             "Identifies activist investors, proxy advisor criticism and regulatory probes"],
+              ["Industry",          "Assesses sector disruption, M&A dynamics and competitive pressures"],
+              ["Prediction",        "Hard rules first (incl. Rule 5b for completed transitions), then LLM scoring + self-challenge"],
             ].map(([l,tip],i)=>(
               <div key={l} title={tip} style={{fontSize:10,fontWeight:500,color:"rgba(255,255,255,0.75)",padding:"3px 8px",borderRadius:3,background:"rgba(0,0,0,0.15)",whiteSpace:"nowrap",cursor:"default"}}>{i+1}. {l}</div>
             ))}
@@ -1799,7 +1790,7 @@ export default function App(){
         </div>
       </div>
 
-      {/* ── INPUT DRAWER ── */}
+      {/* INPUT DRAWER */}
       {showIn&&(
         <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,flexShrink:0,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"stretch"}}>
@@ -1849,7 +1840,7 @@ export default function App(){
         </div>
       )}
 
-      {/* ── MAIN 2-COL ── */}
+      {/* MAIN 2-COL */}
       <div style={{flex:1,display:"grid",gridTemplateColumns:sorted.length?"260px 1fr":"1fr",overflow:"hidden",minHeight:0}}>
         {sorted.length>0&&(
           <div style={{background:C.white,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",overflow:"hidden"}}>
