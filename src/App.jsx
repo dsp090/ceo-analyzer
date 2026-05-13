@@ -250,7 +250,7 @@ Search for ALL of these queries:
 ⚠ CRITICAL ORDERING RULE — READ CAREFULLY:
 - The CURRENT CEO is the person IN THE ROLE RIGHT NOW as of ${today}.
 - The DEPARTED CEO is the person who PREVIOUSLY held the role and has since LEFT.
-- If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED.
+- If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED like alex simpkin is the ceo of CDS Superstores (International) Ltd.
 - Do NOT confuse the order. The most RECENTLY appointed person is the CURRENT CEO.
 - A CEO who moves to a purely non-executive or advisory role is NO LONGER CEO.
 - CHAIRMAN HANDOFF: If "Person A returned to Chairman" AND "Person B was appointed CEO" → Person B is the CURRENT CEO. Person A departed the CEO role. Never report Person A as current CEO in this case.
