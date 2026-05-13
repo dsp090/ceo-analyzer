@@ -823,6 +823,9 @@ async function agentPrediction(data, finance, press, industry) {
     ...(data.financial_signals      || []),
     ...(data.press_activism_signals || []),
     ...(data.industry_signals       || []),
+    ...(finance.signals             || []),
+    ...(press.signals               || []),
+    ...(industry.signals            || []),
   ].join(" ");
   if (_isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText)) {
     return {
@@ -924,7 +927,9 @@ async function agentPrediction(data, finance, press, industry) {
   }
 
   // Rules 5 / 5b: New CEO already in seat (tenure <= 1.5yr) — transition complete.
-  if (newlyInSeat || samePersonAlready) {
+  // BUT: if the new CEO is interim, do NOT suppress — let Rule C handle it as high_likelihood.
+  const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
+  if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
     const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc : null;
     const rationale = departedCEO
@@ -953,20 +958,28 @@ async function agentPrediction(data, finance, press, industry) {
            l.includes("worse") || l.includes("behind") ||
            l.includes("trail") || l.includes("weak");
   };
-  if (age >= 60 && ten >= 3 && tsrBelowPeers(data.tsr_vs_peers)) {
+  const _tsrPeersA = (!ni(data.tsr_vs_peers) ? data.tsr_vs_peers : "") + " " +
+                     (!ni(finance.tsr_vs_peers) ? finance.tsr_vs_peers : "");
+  if (age >= 60 && ten >= 3 && tsrBelowPeers(_tsrPeersA)) {
+    const _tsrDisplayA = !ni(finance.tsr_vs_peers) ? finance.tsr_vs_peers : data.tsr_vs_peers;
     return {
       prediction: "high_likelihood",
       confidence: "high",
-      analytical_rationale: `${rationaleCEO} is ${data.ceo_age} years old with ${data.ceo_tenure_years} years as CEO and TSR performance below sector peers on a 3-year annualised basis (${data.tsr_vs_peers}). The combination of age and sustained underperformance relative to peers is a strong indicator of near-term board-initiated succession pressure.`
+      analytical_rationale: `${rationaleCEO} is ${data.ceo_age} years old with ${data.ceo_tenure_years} years as CEO and TSR performance below sector peers on a 3-year annualised basis (${_tsrDisplayA}). The combination of age and sustained underperformance relative to peers is a strong indicator of near-term board-initiated succession pressure.`
     };
   }
 
   // ── Rule B: Tenure ≥ 5yr + below-peer TSR (3yr) → High Likelihood ─────────
-  if (ten >= 5 && tsrBelowPeers(data.tsr_vs_peers)) {
+  // Check both data.tsr_vs_peers (from agentResearch) and finance.tsr_vs_peers (from agentFinance)
+  // since the finance agent often has richer peer comparison data
+  const _tsrPeers = (!ni(data.tsr_vs_peers) ? data.tsr_vs_peers : "") + " " +
+                    (!ni(finance.tsr_vs_peers) ? finance.tsr_vs_peers : "");
+  if (ten >= 5 && tsrBelowPeers(_tsrPeers)) {
+    const _tsrDisplay = !ni(finance.tsr_vs_peers) ? finance.tsr_vs_peers : data.tsr_vs_peers;
     return {
       prediction: "high_likelihood",
       confidence: "high",
-      analytical_rationale: `${rationaleCEO} has been CEO for ${data.ceo_tenure_years} years with TSR performance below sector peers on a 3-year annualised basis (${data.tsr_vs_peers}). Sustained underperformance vs peers over a long tenure is one of the strongest predictors of board-driven CEO succession at professionally managed companies.`
+      analytical_rationale: `${rationaleCEO} has been CEO for ${data.ceo_tenure_years} years with TSR performance below sector peers on a 3-year annualised basis (${_tsrDisplay}). Sustained underperformance vs peers over a long tenure is one of the strongest predictors of board-driven CEO succession at professionally managed companies.`
     };
   }
 
@@ -982,10 +995,13 @@ async function agentPrediction(data, finance, press, industry) {
     data.mandate_signals,
     data.succession_plan_disclosed,
     data.founder_status,
-    ...(data.leadership_signals  || []),
-    ...(data.financial_signals   || []),
+    ...(data.leadership_signals     || []),
+    ...(data.financial_signals      || []),
     ...(data.press_activism_signals || []),
-    ...(data.industry_signals    || []),
+    ...(data.industry_signals       || []),
+    ...(finance.signals             || []),
+    ...(press.signals               || []),
+    ...(industry.signals            || []),
   ].join(" ");
   if (isInterim(data.ceo_name) || isInterim(allSignalText)) {
     return {
