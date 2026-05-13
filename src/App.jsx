@@ -1,6 +1,7 @@
 // v8-agents build — FIXED: tenure<=1.5yr clears all transition flags (was <1.5)
 // PATCH 1: x-portkey-cache-force-refresh header added to callLLM
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
+// PATCH 4: new_ceo_appointed only if tenure < 1yr (changed from <= 1.5)
 // PATCH 3: Executive Chairman now treated as CEO-equivalent in TITLE RULE
 import { useState, useRef, useEffect } from "react";
 
@@ -567,8 +568,8 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
   // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure
   // is correctly treated as a completed transition, not a pending one.
   const _tenureNum = parseFloat(String(d.ceo_tenure_years).replace("~",""));
-  if (!isNaN(_tenureNum) && _tenureNum <= 1.5) {
-    console.log("[v8 FIX] tenure",_tenureNum,"<= 1.5 — clearing all transition flags for",d.ceo_name);
+  if (!isNaN(_tenureNum) && _tenureNum <= 1) {
+    console.log("[v8 FIX] tenure",_tenureNum,"< 1yr — clearing all transition flags for",d.ceo_name);
     d.incoming_ceo_announced  = "no";
     d.incoming_ceo_name       = "N/A";
     d.incoming_ceo_background = "N/A";
@@ -909,8 +910,8 @@ async function agentPrediction(data, finance, press, industry) {
 
   // ── Compute tenure once — used by Rules 4, 5, 5b ─────────────────────────
   const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
-  // PATCH 2: changed < 1.5 to <= 1.5 — catches the exact boundary case (e.g. 1.5yr tenure)
-  const newlyInSeat = !isNaN(tenureNum) && tenureNum <= 1.5;
+  // PATCH 4: new_ceo_appointed only fires for tenure < 1yr
+  const newlyInSeat = !isNaN(tenureNum) && tenureNum <= 1;
 
   // Rule 4: Incoming CEO announced — BUT only if they have NOT already started.
   const samePersonAlready = data.incoming_ceo_name &&
@@ -926,7 +927,7 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rules 5 / 5b: New CEO already in seat (tenure <= 1.5yr) — transition complete.
+  // Rules 5 / 5b: New CEO already in seat (tenure < 1yr) — transition complete.
   // BUT: if the new CEO is interim, do NOT suppress — let Rule C handle it as high_likelihood.
   const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
   if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
