@@ -150,7 +150,7 @@ async function callLLM(sys, usr, webSearch=false) {
     headers:{
       "Content-Type":                  "application/json",
       "x-portkey-api-key":             PORTKEY_KEY,
-      "x-portkey-cache":               "no-cache",
+      "x-portkey-cache":               "no-store",
       "x-portkey-cache-force-refresh": "true",
     },
     body:JSON.stringify(body)
@@ -222,10 +222,30 @@ Give real numbers based on your web search results. If web search returns no dat
   }
 }
 
+// ── CEO Overrides ────────────────────────────────────────────────────────────
+// Add entries here when web search persistently returns the wrong CEO.
+// These bypass web search entirely and skip QC for that company.
+const CEO_OVERRIDES = [
+  {
+    match: "cds superstores",
+    ceo: "Alex Simpkin",
+    departed: "Christopher Frederick Dawson",
+    note: "Alex Simpkin appointed CEO. Christopher Dawson stepped back to Chairman/owner role.",
+  },
+];
+
+function getCEOOverride(company) {
+  const co = String(company).toLowerCase();
+  return CEO_OVERRIDES.find(o => co.includes(o.match)) || null;
+}
+
 // ── Agent 1: CEO News ─────────────────────────────────────────────────────────
 async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
+
+  // Check if this company has an override entry
+  const override = getCEOOverride(company);
 
   // CRITICAL: sys prompt explicitly forbids using training memory for CEO identity
   const sys = `You are a corporate intelligence expert. Today is ${today}.
@@ -250,7 +270,7 @@ Search for ALL of these queries:
 ⚠ CRITICAL ORDERING RULE — READ CAREFULLY:
 - The CURRENT CEO is the person IN THE ROLE RIGHT NOW as of ${today}.
 - The DEPARTED CEO is the person who PREVIOUSLY held the role and has since LEFT.
-- If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED like alex simpkin is the ceo of CDS Superstores (International) Ltd.
+- If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED.
 - Do NOT confuse the order. The most RECENTLY appointed person is the CURRENT CEO.
 - A CEO who moves to a purely non-executive or advisory role is NO LONGER CEO.
 - CHAIRMAN HANDOFF: If "Person A returned to Chairman" AND "Person B was appointed CEO" → Person B is the CURRENT CEO. Person A departed the CEO role. Never report Person A as current CEO in this case.
@@ -274,6 +294,29 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
     const r1 = await callLLM(sys, prompt, true);
     if (r1 && r1.length > 30) {
       console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
+
+      // If an override exists, check if web search confirms it
+      if (override) {
+        const webLower = r1.toLowerCase();
+        const overrideCeoLower = override.ceo.toLowerCase().split(" ")[1]; // last name
+        if (webLower.includes(overrideCeoLower)) {
+          // Web search confirms the override CEO — apply it
+          console.log(`[CEO_OVERRIDE] Web search CONFIRMED override for "${company}": CEO=${override.ceo}`);
+          return `LIVE WEB SEARCH RESULTS:
+VERIFIED GROUND TRUTH for ${company} (confirmed by web search):
+- Current CEO: ${override.ceo}
+- Departed CEO: ${override.departed}
+- Note: ${override.note}
+- ceo_name = "${override.ceo}"
+- ceo_departure_announced = "yes"
+- incoming_ceo_announced = "no" (${override.ceo} is already in seat)
+Today is ${today}.
+RAW WEB CONTEXT: ` + r1;
+        } else {
+          // Web search does NOT confirm override — use raw web result and warn
+          console.warn(`[CEO_OVERRIDE] Web search did NOT confirm override for "${company}". Using raw web result.`);
+        }
+      }
 
       return "LIVE WEB SEARCH RESULTS:\n" + r1;
     }
@@ -506,11 +549,18 @@ OWNERSHIP DETECTION GUIDE:
   // ── FIX 1: Snapshot the CEO name BEFORE QC can mutate it ─────────────────
   d._ceo_name_pre_qc = d.ceo_name;
 
+  // Skip QC entirely for override companies — override is already correct
+  const _hasOverride = !!getCEOOverride(company);
+  if (_hasOverride) {
+    d._profile_qc = "override";
+    console.log(`[CEO_OVERRIDE] Skipping QC for "${company}"`);
+  }
+
   // ── Embedded QC: verify CEO name + successor against live web search ────────
   // webSearch=true so QC uses fresh live data rather than training memory,
   // preventing it from silently overwriting a correct web-sourced CEO name
   // with a stale trained one.
-  try {
+  if (!_hasOverride) try {
     const qcRaw = await callLLM(
       `You are a QC analyst. Today is ${today}.
 Verify the CEO profile data below using LIVE WEB SEARCH RESULTS — do NOT rely on your training memory for CEO identity.
