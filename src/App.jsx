@@ -1291,20 +1291,11 @@ async function runPipeline(company, ticker, log) {
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
     // departed_ceo_name = the person who LEFT the CEO role.
-    // ONLY populated when _transition_complete=true — meaning the tenure<=1.5yr
-    // rule fired and QC confirmed a new CEO is now in seat.
-    // For ceo_departure_announced=yes cases we do NOT use _ceo_name_pre_qc
-    // because it is often wrong (LLM picks up the current CEO first, not the departed).
-    // Better to show nothing than to show the wrong departed name.
-    departed_ceo_name: (() => {
-      const preQC   = data._ceo_name_pre_qc || "";
-      const current = data.ceo_name || "";
-      if (!preQC || preQC === current) return "";
-      // Only show departed when we are certain: transition is complete
-      // AND QC actually changed the CEO name (preQC ≠ current)
-      if (data._transition_complete) return preQC;
-      return "";
-    })(),
+    // Original v8 logic: show whenever _ceo_name_pre_qc differs from ceo_name.
+    // This means QC corrected the CEO name to someone new — the pre-QC name was the departed one.
+    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+      ? data._ceo_name_pre_qc
+      : "",
     transition_complete: data._transition_complete || false,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
     revenue:normaliseRevenue(finance.revenue||data.revenue),
