@@ -1148,6 +1148,10 @@ async function runPipeline(company, ticker, log) {
   if(data.ceo_departure_announced==="yes")
     log(p=>[...p,`[${company}]     ⚠ Departure announced — departing CEO: ${data._ceo_name_pre_qc || data.ceo_name}`]);
 
+  // ── Attach company + ticker to data so downstream agents have them ─────────
+  data.company = company;
+  data.ticker  = ticker || "";
+
   log(p=>[...p,`[${company}] 3/6 Finance — analysing revenue, TSR, margins...`]);
   const finance = await agentFinance(data);
   if(finance._finance_qc === "verified")
@@ -2266,9 +2270,11 @@ export default function App(){
     const isExcel = /\.(xlsx|xls|xlsm)$/i.test(f.name);
     try {
       if(isExcel){
-        const buf = await f.arrayBuffer();
-        const wb = XLSX.read(buf, {type:"array"});
-        const ws = wb.Sheets[wb.SheetNames[0]];
+        // xlsx-js-style UMD bundle needs Uint8Array, not ArrayBuffer
+        const buf  = await f.arrayBuffer();
+        const data = new Uint8Array(buf);
+        const wb   = XLSX.read(data, {type:"array"});
+        const ws   = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
         const header = rows[0]?.map(h=>String(h).toLowerCase().trim()) || [];
         const compIdx = header.findIndex(h=>h.includes("company")||h.includes("name"));
@@ -2282,7 +2288,10 @@ export default function App(){
         const rows=t.split("\n").map(r=>r.split(",").map(c=>c.trim().replace(/^"|"$/g,"")));
         setFileCos(rows.filter(r=>r[0]&&r[0].toLowerCase()!=="company").map(r=>({company:r[0],ticker:r[1]||""})).slice(0,100));
       }
-    } catch(e){setErr("File parse error: "+e.message);}
+    } catch(err){
+      console.error("File parse error:", err);
+      setErr("File parse error: "+err.message);
+    }
   };
 
   const parseTxt=()=>txt.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(",");return{company:p[0]?.trim(),ticker:p[1]?.trim()||""};}).filter(c=>c.company).slice(0,20);
