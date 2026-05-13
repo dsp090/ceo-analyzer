@@ -336,7 +336,7 @@ CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
 - NEVER swap these. The NEWER appointment = current CEO.
 
 ⚠ TITLE RULE: The CEO is the person who holds the title "Chief Executive Officer" or "CEO".
-- "Executive Chairman" is NOT the same as CEO unless they explicitly also hold the CEO title.
+- “Executive Chairman” is not CEO unless no separate CEO/equivalent is named and sources explicitly describe the Executive Chair as the top operating chief executive running the company.
 - "Non-Executive Director" is NOT CEO.
 - "Chairman" alone is NOT CEO.
 - Only set ceo_name to someone who actually holds the CEO title.
