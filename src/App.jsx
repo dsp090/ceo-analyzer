@@ -353,7 +353,7 @@ If the context says "Person A returned to Chairman / stepped back to Chairman" A
 
 ⚠ TITLE RULE — READ CAREFULLY:
 - The current CEO is the person who holds the title "Chief Executive Officer", "CEO", or "Executive Chairman" and is running the business day-to-day.
-- "Executive Chairman" IS only treated as the CEO-equivalent when they are the senior executive leading the business. Use their name in ceo_name.
+- "Executive Chairman" IS treated as the CEO-equivalent when they are the senior executive leading the business. Use their name in ceo_name.
 - "Non-Executive Chairman" is NOT CEO — they are a board role only.
 - "Non-Executive Director" is NOT CEO.
 - A plain "Chairman" who is non-executive is NOT CEO.
@@ -417,6 +417,9 @@ MAPPING RULES — extract from the news context above:
 ► ceo_name
   If the new CEO / Executive Chairman has ALREADY started → use their name
   If still in transition → keep the current/outgoing CEO's name
+  If the current CEO is INTERIM or ACTING → include the word "Interim" or "Acting" in ceo_name (e.g. "John Smith (Interim)")
+  ⚠ INTERIM FLAG: If the web context describes the current CEO as interim, acting, or temporary — you MUST reflect
+  this in either ceo_name (e.g. "Jane Doe (Interim)") or mandate_signals (e.g. "Interim CEO appointment — permanent search underway")
 
 ► ceo_start_date
   Use YYYY-MM format where possible. If new CEO just started, use their start date.
@@ -803,6 +806,33 @@ async function agentPrediction(data, finance, press, industry) {
     data.incoming_ceo_announced === "yes"
   );
 
+  // ── Rule 0: Interim / Acting CEO → High Likelihood (overrides ALL ownership rules) ──
+  // An interim CEO signals no permanent leader regardless of ownership type.
+  // This fires BEFORE family/PE/government gates so it is never suppressed by ownership.
+  const _isInterimStr = (s) => {
+    if (!s) return false;
+    const l = String(s).toLowerCase();
+    return l.includes("interim") || l.includes("acting ceo") || l.includes("temporary ceo");
+  };
+  const _allSignalText = [
+    data.ceo_name,
+    data.mandate_signals,
+    data.succession_plan_disclosed,
+    data.founder_status,
+    ...(data.leadership_signals     || []),
+    ...(data.financial_signals      || []),
+    ...(data.press_activism_signals || []),
+    ...(data.industry_signals       || []),
+  ].join(" ");
+  if (_isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText)) {
+    return {
+      prediction: "high_likelihood",
+      confidence: "high",
+      analytical_rationale: `${rationaleCEO} is serving as interim/acting CEO, indicating the board has not yet identified or confirmed a permanent successor. Interim appointments represent structurally elevated succession risk — a permanent CEO search is either underway or imminent.`
+    };
+  }
+
+
   // ── Rule 1a: Family / Founder-led — structurally low ─────────────────────
   const isFounderFamily = [
     "founder_ceo",
@@ -941,14 +971,23 @@ async function agentPrediction(data, finance, press, industry) {
   }
 
   // ── Rule C: Interim CEO → High Likelihood ─────────────────────────────────
+  // Checks all fields that could surface "interim" / "acting" / "temporary"
   const isInterim = (s) => {
     if (!s) return false;
-    const l = s.toLowerCase();
-    return l.includes("interim") || l.includes("acting") || l.includes("temporary");
+    const l = String(s).toLowerCase();
+    return l.includes("interim") || l.includes("acting ceo") || l.includes("temporary ceo");
   };
-  if (isInterim(data.ceo_name) || isInterim(data.mandate_signals) ||
-      isInterim(data.leadership_signals?.join(" ")) ||
-      isInterim(data.succession_plan_disclosed)) {
+  const allSignalText = [
+    data.ceo_name,
+    data.mandate_signals,
+    data.succession_plan_disclosed,
+    data.founder_status,
+    ...(data.leadership_signals  || []),
+    ...(data.financial_signals   || []),
+    ...(data.press_activism_signals || []),
+    ...(data.industry_signals    || []),
+  ].join(" ");
+  if (isInterim(data.ceo_name) || isInterim(allSignalText)) {
     return {
       prediction: "high_likelihood",
       confidence: "high",
