@@ -546,7 +546,13 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
       true  // webSearch=true — use live search, not training memory
     );
     const qc = parseJSON(qcRaw, {});
-    if (qc.ceo_correct === false && qc.correct_ceo) d.ceo_name = qc.correct_ceo;
+    if (qc.ceo_correct === false && qc.correct_ceo) {
+      d.ceo_name = qc.correct_ceo;
+      // Clear credentials that belonged to the old CEO — must not show against the corrected name
+      d.ceo_age          = "";
+      d.ceo_start_date   = "";
+      d.ceo_tenure_years = "";
+    }
     if (qc.successor_missing && qc.correct_successor) {
       d.incoming_ceo_name = qc.correct_successor;
       d.incoming_ceo_announced = "yes";
