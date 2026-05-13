@@ -266,7 +266,25 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
     const r1 = await callLLM(sys, prompt, true);
     if (r1 && r1.length > 30) {
       console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
-      return "LIVE WEB SEARCH RESULTS:\n" + r1;
+
+      // Second targeted search — specifically asks "who holds the CEO title right now"
+      // This catches cases where the first search returns transition news but not the
+      // definitive current title holder (e.g. multi-step transitions)
+      let r2 = "";
+      try {
+        r2 = await callLLM(
+          `You are a corporate intelligence expert. Today is ${today}.
+USE YOUR WEB SEARCH TOOL. Search for who CURRENTLY holds the CEO title at this company right now.
+Focus only on the most recent information. Return a short factual answer.`,
+          `SEARCH: Who is the current CEO of "${company}" as of ${today}?
+Search for: "${company} CEO title holder ${yr}"
+Return: Full name of current CEO, their start date, and whether they hold the title "CEO" or "Executive Chairman" or other.`,
+          true
+        );
+      } catch {}
+
+      const combined = r1 + (r2 ? `\n\n--- VERIFICATION SEARCH ---\n${r2}` : "");
+      return "LIVE WEB SEARCH RESULTS:\n" + combined;
     }
   } catch(e) {
     console.error(`❌ [fetchCEONews] Web search call FAILED for "${company}":`, e.message);
@@ -316,6 +334,12 @@ CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
 - ceo_name = Person B (the NEW/CURRENT CEO — most recently appointed)
 - The DEPARTED field refers to Person A (the OLD CEO who left)
 - NEVER swap these. The NEWER appointment = current CEO.
+
+⚠ TITLE RULE: The CEO is the person who holds the title "Chief Executive Officer" or "CEO".
+- "Executive Chairman" is NOT the same as CEO unless they explicitly also hold the CEO title.
+- "Non-Executive Director" is NOT CEO.
+- "Chairman" alone is NOT CEO.
+- Only set ceo_name to someone who actually holds the CEO title.
 
 EXAMPLE: "CEO A announced retirement, CEO B named as successor, starts 2026"
 → ceo_name="CEO A", ceo_departure_announced="yes", incoming_ceo_announced="yes", incoming_ceo_name="CEO B"
@@ -1266,23 +1290,19 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    // departed_ceo_name = the person who LEFT the CEO role
-    // Rule: if _ceo_name_pre_qc differs from ceo_name, one of them departed.
-    // The DEPARTED one is whoever is NOT the current sitting CEO (data.ceo_name).
-    // If _transition_complete=true, the pre-QC name was the old CEO who left.
-    // Guard: never show departed = current ceo_name (would be self-referential).
+    // departed_ceo_name = the person who LEFT the CEO role.
+    // ONLY populated when _transition_complete=true — meaning the tenure<=1.5yr
+    // rule fired and QC confirmed a new CEO is now in seat.
+    // For ceo_departure_announced=yes cases we do NOT use _ceo_name_pre_qc
+    // because it is often wrong (LLM picks up the current CEO first, not the departed).
+    // Better to show nothing than to show the wrong departed name.
     departed_ceo_name: (() => {
       const preQC   = data._ceo_name_pre_qc || "";
       const current = data.ceo_name || "";
       if (!preQC || preQC === current) return "";
-      // preQC and current differ — preQC is the one the LLM originally found.
-      // If transition is complete, preQC = old CEO who departed, current = new CEO. ✓
-      // If preQC is actually the new CEO (LLM error corrected by QC), then
-      // current = old CEO still in seat — in that case there is no departed yet.
-      // We detect this by checking: if transition_complete=true, preQC=departed.
-      // Otherwise if departure_announced=yes and preQC≠current, preQC=departed.
+      // Only show departed when we are certain: transition is complete
+      // AND QC actually changed the CEO name (preQC ≠ current)
       if (data._transition_complete) return preQC;
-      if (data.ceo_departure_announced === "yes") return preQC;
       return "";
     })(),
     transition_complete: data._transition_complete || false,
