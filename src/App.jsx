@@ -444,15 +444,17 @@ Field constraints:
 - ceo_departure_announced / incoming_ceo_announced: "yes" or "no" only
 - revenue: USD ONLY, format $XXbn (billions) or $XXXm (millions) — always convert to USD, never use €/£/¥. USE YOUR KNOWLEDGE, do not return "not clearly inferable" for major public companies
 - tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%" — USE YOUR KNOWLEDGE for well-known companies
-- ceo_age: integer — USE YOUR KNOWLEDGE, do not return "not publicly disclosed" for well-known CEOs
+- ceo_age: integer — USE YOUR KNOWLEDGE for the CURRENT CEO named in ceo_name. Do NOT use age data from a previous or departed CEO. If the current CEO's age is unknown, leave blank.
 - All list fields: max 4 items, 20 words each
 
 CRITICAL: For major public companies you MUST use your web search to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you can find.
 
 OWNERSHIP DETECTION GUIDE:
-- founder_ceo: current CEO is also the founder of the company
-- family_ceo: CEO is a family member of the founding family
-- founder_family_control_non_ceo: founder or founding family controls the company but the sitting CEO is NOT a family member
+- founder_ceo: current CEO IS the founder themselves — the founder is still personally running the company as CEO
+  ⚠ If the founder has STEPPED BACK or HANDED OVER the CEO role to someone else → do NOT use founder_ceo. Use founder_family_control_non_ceo instead.
+- family_ceo: CEO is a family member of the founding family (not the founder themselves)
+- founder_family_control_non_ceo: founder or founding family still controls/owns the company but has handed CEO role to a professional manager who is NOT the founder and NOT a family member
+  ⚠ Use this when: founder stepped back from CEO, appointed a new external/professional CEO, but founder remains as chairman or major shareholder
 - family_majority_owned: a family holds a majority or controlling stake — the family accumulated or inherited a controlling position — the CEO may or may not be a family member
 - private_equity_owned: company is majority-owned by a PE firm — use this if the company is NOT publicly listed OR is majority PE-backed
 - government_controlled: government holds a controlling stake but company may be listed
