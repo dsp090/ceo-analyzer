@@ -1,6 +1,7 @@
 // v8-agents build — FIXED: tenure<=1.5yr clears all transition flags (was <1.5)
 // PATCH 1: x-portkey-cache-force-refresh header added to callLLM
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
+// PATCH 3: Executive Chairman now treated as CEO-equivalent in TITLE RULE
 import { useState, useRef, useEffect } from "react";
 
 // SheetJS loaded via script tag for reliable global access
@@ -250,10 +251,16 @@ Search for ALL of these queries:
 - The DEPARTED CEO is the person who PREVIOUSLY held the role and has since LEFT.
 - If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED.
 - Do NOT confuse the order. The most RECENTLY appointed person is the CURRENT CEO.
-- A CEO who moves to chairman, advisory, or non-executive role is NO LONGER CEO.
+- A CEO who moves to a purely non-executive or advisory role is NO LONGER CEO.
+- CHAIRMAN HANDOFF: If "Person A returned to Chairman" AND "Person B was appointed CEO" → Person B is the CURRENT CEO. Person A departed the CEO role. Never report Person A as current CEO in this case.
 
-Q1. CURRENT CEO: Who is the CEO of "${company}" RIGHT NOW as of ${today}? Full name + start date.
-     The CURRENT CEO is the most recently appointed person — not the previous one.
+⚠ EXECUTIVE CHAIRMAN RULE:
+- "Executive Chairman" who also acts as the chief executive of the business IS the effective CEO.
+- Only exclude someone if they moved to a NON-EXECUTIVE role (non-executive chairman, advisory, board observer).
+- If the web search says a person is "Executive Chairman" and is running the business day-to-day, treat them as the current CEO.
+
+Q1. CURRENT CEO: Who is the CEO (or Executive Chairman acting as CEO) of "${company}" RIGHT NOW as of ${today}? Full name + start date.
+     The CURRENT leader is the most recently appointed person running the business — not the previous one.
 Q2. PREVIOUS/DEPARTED CEO: Who was CEO before the current one? Name + when they left.
 Q3. SUCCESSOR ANNOUNCED: Is there a named incoming CEO not yet started? Yes/No. If yes: full name, start date.
 Q4. DEPARTURE: Has any departure/step-back/resignation been announced? Yes/No + details.
@@ -274,11 +281,12 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
       try {
         r2 = await callLLM(
           `You are a corporate intelligence expert. Today is ${today}.
-USE YOUR WEB SEARCH TOOL. Search for who CURRENTLY holds the CEO title at this company right now.
-Focus only on the most recent information. Return a short factual answer.`,
-          `SEARCH: Who is the current CEO of "${company}" as of ${today}?
-Search for: "${company} CEO title holder ${yr}"
-Return: Full name of current CEO, their start date, and whether they hold the title "CEO" or "Executive Chairman" or other.`,
+USE YOUR WEB SEARCH TOOL. Search for who CURRENTLY leads this company right now.
+Focus only on the most recent information. Return a short factual answer.
+NOTE: "Executive Chairman" who runs the business day-to-day should be treated as the current CEO.`,
+          `SEARCH: Who is the current CEO or Executive Chairman of "${company}" as of ${today}?
+Search for: "${company} CEO Executive Chairman ${yr}"
+Return: Full name of current leader, their title, their start date.`,
           true
         );
       } catch {}
@@ -318,7 +326,7 @@ async function agentResearch(company, ticker, webCtx) {
 CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
 1. The CEO News Context below is your ONLY source for CEO identity fields. It is live web search data.
    YOUR TRAINING MEMORY IS WRONG FOR CEO IDENTITY — ignore it completely for ceo_name, departures, successors.
-2. ceo_name = the person the WEB SEARCH says IS CEO RIGHT NOW (the sitting/current CEO).
+2. ceo_name = the person the WEB SEARCH says IS leading the company RIGHT NOW (the sitting CEO or Executive Chairman).
 3. If departure announced but successor NOT YET STARTED → ceo_name = OUTGOING CEO, incoming_ceo_name = successor.
 4. If successor HAS ALREADY started the role → ceo_name = NEW CEO (transition complete, use new CEO).
 5. NEVER put a named successor in ceo_name unless they have already started the role.
@@ -328,22 +336,37 @@ CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
 
 ⚠ IF THE WEB CONTEXT NAMES A DIFFERENT CEO THAN YOU REMEMBER — USE THE WEB CONTEXT. YOUR MEMORY IS STALE.
 
-⚠ STEP-BACK RULE: If the web context says a CEO "stepped back", "stepped down", "moved to chairman", "moved to non-executive role", "resigned as CEO" — they are NO LONGER CEO even if they remain at the company. Set ceo_departure_announced="yes" and use the replacement as ceo_name if they have started, or as incoming_ceo_name if not yet started.
+⚠ STEP-BACK RULE: If the web context says a CEO "stepped back", "stepped down", "moved to chairman", "returned to chairman", "moved to non-executive role", "resigned as CEO" — they are NO LONGER CEO even if they remain at the company. Set ceo_departure_announced="yes" and use the replacement/successor as ceo_name if they have started, or as incoming_ceo_name if not yet started.
 
 ⚠ ORDERING RULE — CRITICAL: If the web context describes a leadership change where Person A was replaced by Person B:
-- ceo_name = Person B (the NEW/CURRENT CEO — most recently appointed)
-- The DEPARTED field refers to Person A (the OLD CEO who left)
+- ceo_name = Person B (the NEW/CURRENT leader — most recently appointed)
+- The DEPARTED field refers to Person A (the OLD CEO who left or stepped back)
 - NEVER swap these. The NEWER appointment = current CEO.
+- The person who "returned to chairman" or "stepped back" is ALWAYS the DEPARTED one — NOT the current CEO.
 
-⚠ TITLE RULE: The CEO is the person who holds the title "Chief Executive Officer" or "CEO".
-- “Executive Chairman” is not CEO unless no separate CEO/equivalent is named and sources explicitly describe the Executive Chair as the top operating chief executive running the company for exapmle in Asda as of now chairman executive is the top leadership role.
+⚠ CHAIRMAN HANDOFF PATTERN — very common, read carefully:
+If the context says "Person A returned to Chairman / stepped back to Chairman" AND "Person B was appointed CEO":
+→ ceo_name = "Person B" (they are NOW the CEO)
+→ ceo_departure_announced = "yes" (Person A left the CEO role)
+→ Person A is the DEPARTED CEO, not the current one
+→ NEVER set ceo_name = "Person A" in this pattern. They gave up the CEO role.
+
+⚠ TITLE RULE — READ CAREFULLY:
+- The current CEO is the person who holds the title "Chief Executive Officer", "CEO", or "Executive Chairman" and is running the business day-to-day.
+- "Executive Chairman" IS only treated as the CEO-equivalent when they are the senior executive leading the business. Use their name in ceo_name.
+- "Non-Executive Chairman" is NOT CEO — they are a board role only.
 - "Non-Executive Director" is NOT CEO.
-- "Chairman" alone is NOT CEO.
-- Only set ceo_name to someone who actually holds the CEO title.
+- A plain "Chairman" who is non-executive is NOT CEO.
+- Only exclude someone if the web context explicitly says they are NON-EXECUTIVE or purely a board/advisory role.
 
-EXAMPLE: "CEO A announced retirement, CEO B named as successor, starts 2026"
+EXAMPLES:
+Example 1: "CEO A announced retirement, CEO B named as successor, starts 2026"
 → ceo_name="CEO A", ceo_departure_announced="yes", incoming_ceo_announced="yes", incoming_ceo_name="CEO B"
 NEVER: ceo_name="CEO B" (they have not started yet)
+
+Example 2: "Person A returned to Chairman role. Person B appointed as new CEO."
+→ ceo_name="Person B" (they ARE the CEO now), ceo_departure_announced="yes" (Person A left CEO role)
+NEVER: ceo_name="Person A" — they gave up the CEO role and are now Chairman only.
 
 Return ONLY valid JSON. No markdown.`,
     `Company: ${company}
@@ -392,7 +415,7 @@ MAPPING RULES — extract from the news context above:
   ⚠ NEVER leave incoming_ceo_name as "N/A" if a person's name appears in the news context above
 
 ► ceo_name
-  If the new CEO has ALREADY started → use the NEW CEO's name
+  If the new CEO / Executive Chairman has ALREADY started → use their name
   If still in transition → keep the current/outgoing CEO's name
 
 ► ceo_start_date
@@ -499,13 +522,19 @@ OWNERSHIP DETECTION GUIDE:
       `You are a QC analyst. Today is ${today}.
 Verify the CEO profile data below using LIVE WEB SEARCH RESULTS — do NOT rely on your training memory for CEO identity.
 Your training data about who holds CEO roles may be outdated. The web search is the authoritative source.
+IMPORTANT: If the current leader holds the title "Executive Chairman" and is running the business day-to-day,
+they ARE the correct CEO-equivalent — do NOT flag them as incorrect just because their title is not "CEO".
+IMPORTANT: CHAIRMAN HANDOFF PATTERN — if the web search shows "Person A returned to Chairman" and "Person B was
+appointed as CEO", then Person B is the correct current CEO. Person A departed the CEO role and is now Chairman only.
+Do NOT flag Person B as incorrect and do NOT suggest Person A as the correct CEO in this pattern.
+Only flag as incorrect if the web search clearly shows a different person is the current executive leader.
 Return ONLY valid JSON.`,
       `Company: ${company} | Ticker: ${ticker||""}
 CEO Name in data: ${d.ceo_name}
 Successor in data: ${d.incoming_ceo_name}
 Departure announced: ${d.ceo_departure_announced}
 
-1. Is "${d.ceo_name}" the correct current CEO? If wrong, provide the correct name.
+1. Is "${d.ceo_name}" the correct current CEO or Executive Chairman running the business? If wrong, provide the correct name.
 2. Has a named successor been publicly announced that is missing from this data?
 3. Is the ownership category "${d.ownership_category}" correct?
 
@@ -775,9 +804,6 @@ async function agentPrediction(data, finance, press, industry) {
   );
 
   // ── Rule 1a: Family / Founder-led — structurally low ─────────────────────
-  // The founding family or founder controls the board and makes succession
-  // decisions on their own timeline. External pressure, TSR underperformance,
-  // and analyst opinion do not drive CEO changes here.
   const isFounderFamily = [
     "founder_ceo",
     "family_ceo",
@@ -806,9 +832,6 @@ async function agentPrediction(data, finance, press, industry) {
   }
 
   // ── Rule 1b: PE-owned — structurally low ─────────────────────────────────
-  // The PE sponsor controls succession decisions entirely. CEO changes are made
-  // at the sponsor's discretion — not in response to public market pressure,
-  // shareholder activism, or TSR vs listed peers.
   else if (data.ownership_category === "private_equity_owned" && !solidProofOfChange) {
     return {
       prediction: "low_likelihood",
@@ -818,8 +841,6 @@ async function agentPrediction(data, finance, press, industry) {
   }
 
   // ── Rule 1c: Government / State-owned — structurally low ─────────────────
-  // CEO succession is a government or political appointment decision. Market
-  // signals, TSR, and analyst opinion carry no weight in these organisations.
   else if (["government_controlled","state_owned_enterprise"].includes(data.ownership_category) && !solidProofOfChange) {
     const ownershipDesc = data.ownership_category === "state_owned_enterprise" ? "a state-owned enterprise" : "a government-controlled company";
     const ownershipRationale = data.ownership_category === "state_owned_enterprise"
@@ -1086,6 +1107,8 @@ async function agentValidation(company, ticker, data, finance, press, pred) {
     `You are a quality control analyst reviewing AI-generated CEO succession research. Today is ${new Date().toDateString()}.
 Your job is to VERIFY each key data point and flag anything that looks wrong, implausible, or missing.
 Be critical. Do not just accept what the research says — cross-check with your own knowledge.
+IMPORTANT: If the current leader holds the title "Executive Chairman" and is running the business day-to-day,
+they ARE the correct CEO-equivalent. Do NOT flag this as incorrect.
 Return ONLY valid JSON.`,
 
     `Company: ${company}  |  Ticker: ${ticker||""}
@@ -1106,7 +1129,7 @@ Press view: ${press.view}
 Prediction: ${pred.prediction}  |  Confidence: ${pred.confidence}
 
 ━━━ VERIFICATION TASKS ━━━
-1. CEO NAME: Is "${data.ceo_name}" actually the current CEO of ${company} as of ${today}?
+1. CEO NAME: Is "${data.ceo_name}" actually the current CEO or Executive Chairman of ${company} as of ${today}?
 2. SUCCESSOR CHECK: Has ${company} publicly announced a named successor/incoming CEO?
 3. TENURE: Does the tenure of ${data.ceo_tenure_years} years match the start date ${data.ceo_start_date}?
 4. TSR: Are the TSR figures plausible?
@@ -1290,9 +1313,6 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    // departed_ceo_name = the person who LEFT the CEO role.
-    // Original v8 logic: show whenever _ceo_name_pre_qc differs from ceo_name.
-    // This means QC corrected the CEO name to someone new — the pre-QC name was the departed one.
     departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc
       : "",
@@ -1364,7 +1384,6 @@ async function exportToExcel(results) {
     return String(v??"");
   };
 
-  // ── Column groups ─────────────────────────────────────────────────────────
   const SECTIONS = [
     { title:"COMPANY & CEO PROFILE", cols:[
       { key:"company",                      label:"Company",               w:24 },
@@ -1443,13 +1462,7 @@ async function exportToExcel(results) {
   const allCols = SECTIONS.flatMap(s => s.cols);
   const getVal  = (r, c) => flatten(c.fmt ? c.fmt(r[c.key]??"") : (r[c.key]??""));
 
-  // ── Sheet 1: Full data ────────────────────────────────────────────────────
   const wb = XL.utils.book_new();
-
-  // Row 0: title
-  // Row 1: section headers
-  // Row 2: column headers
-  // Row 3+: data
   const titleRow   = [`CEO Succession Risk Analysis  ·  ${results.length} Companies  ·  ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`];
   const sectRow    = [];
   const headerRow  = [];
@@ -1461,40 +1474,23 @@ async function exportToExcel(results) {
     colOffset += sec.cols.length;
   }
   const dataRows = results.map(r => allCols.map(c => getVal(r,c)));
-
   const wsData = [titleRow, sectRow, headerRow, ...dataRows];
   const ws     = XL.utils.aoa_to_sheet(wsData);
 
-  // Column widths
   ws["!cols"] = allCols.map(c => ({ wch: c.w || 20 }));
-
-  // Row heights
-  ws["!rows"] = [
-    { hpt:30 },  // title
-    { hpt:18 },  // section headers
-    { hpt:36 },  // column headers
-    ...results.map(()=>({ hpt:72 }))
-  ];
-
-  // Freeze: first 3 rows + first 2 columns
+  ws["!rows"] = [{ hpt:30 },{ hpt:18 },{ hpt:36 },...results.map(()=>({ hpt:72 }))];
   ws["!freeze"] = { xSplit:2, ySplit:3, topLeftCell:"C4", activePane:"bottomRight" };
-
-  // Autofilter on column header row
   ws["!autofilter"] = { ref: XL.utils.encode_range({ s:{r:2,c:0}, e:{r:2,c:allCols.length-1} }) };
 
-  // Merge title row across all columns
   const merges = [{ s:{r:0,c:0}, e:{r:0,c:allCols.length-1} }];
-  // Merge section header cells
   let off = 0;
   for(const sec of SECTIONS){
     if(sec.cols.length > 1) merges.push({ s:{r:1,c:off}, e:{r:1,c:off+sec.cols.length-1} });
     off += sec.cols.length;
   }
   ws["!merges"] = merges;
-
   XL.utils.book_append_sheet(wb, ws, "CEO Succession Analysis");
 
-  // ── Sheet 2: Summary ─────────────────────────────────────────────────────
   const predOrder  = ["New CEO Appointed","Transition Underway","High Likelihood","Medium Likelihood","Low Likelihood"];
   const predCounts = results.reduce((acc,r)=>{
     const label = PRED_LABEL_MAP[r.prediction]||r.prediction||"Unknown";
@@ -1517,23 +1513,17 @@ async function exportToExcel(results) {
     ["Quick Reference"],
     ["Company","CEO","Tenure","Prediction","Confidence","Revenue","TSR 1yr","Ownership","Sector"],
     ...results.map(r=>[
-      r.company||"",
-      r.ceo_name||"",
+      r.company||"", r.ceo_name||"",
       r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years}yr`:"",
-      PRED_LABEL_MAP[r.prediction]||r.prediction||"",
-      r.confidence||"",
-      r.revenue||"",
-      r.tsr_1yr||"",
-      OWN_LABEL[r.ownership_category]||r.ownership_category||"",
-      r.sector||"",
+      PRED_LABEL_MAP[r.prediction]||r.prediction||"", r.confidence||"",
+      r.revenue||"", r.tsr_1yr||"",
+      OWN_LABEL[r.ownership_category]||r.ownership_category||"", r.sector||"",
     ]),
   ];
 
   const ws2 = XL.utils.aoa_to_sheet(s2Data);
   ws2["!cols"] = [{wch:32},{wch:22},{wch:14},{wch:24},{wch:14},{wch:14},{wch:12},{wch:22},{wch:18}];
   XL.utils.book_append_sheet(wb, ws2, "Summary");
-
-  // ── Download ──────────────────────────────────────────────────────────────
   XL.writeFile(wb, `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
@@ -1738,7 +1728,7 @@ function Detail({r}){
         ))}
       </div>
 
-      {/* Content — unchanged from original */}
+      {/* Content */}
       <div style={{flex:1,overflowY:"auto",background:C.surfaceAlt,padding:"16px 18px"}}>
 
         {tab==="overview"&&(
@@ -1754,7 +1744,8 @@ function Detail({r}){
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
-              <KV label="CEO Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>              <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
+              <KV label="CEO Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>
+              <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
               <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)}/>
               <KV label="Activist Investors" val={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())?r.activist_investors:""} hi={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())}/>
             </div>
@@ -1765,7 +1756,6 @@ function Detail({r}){
               <KV label="COO / Heir Apparent" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
             </div>
 
-            {/* Show transition alert only for PENDING transitions — not completed ones */}
             {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&!r.transition_complete&&(
               <div style={{background:C.redBg,border:`1px solid #FECACA`,borderRadius:7,padding:"12px 15px",marginBottom:10}}>
                 <SH>CEO Transition Alert</SH>
@@ -1780,7 +1770,6 @@ function Detail({r}){
                 }
               </div>
             )}
-            {/* Completed transition banner — shows who departed and who arrived */}
             {r.transition_complete&&r.departed_ceo_name&&(
               <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:7,padding:"12px 15px",marginBottom:10}}>
                 <SH>CEO Transition Complete</SH>
@@ -1863,7 +1852,8 @@ function Detail({r}){
               <KV label="CEO Name" val={r.ceo_name}/>
               {r.departed_ceo_name&&<KV label="Departed CEO" val={r.departed_ceo_name}/>}
               <KV label="Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
-              <KV label="Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>              <KV label="Start Date" val={!ni(r.ceo_start_date)?r.ceo_start_date:""}/>
+              <KV label="Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>
+              <KV label="Start Date" val={!ni(r.ceo_start_date)?r.ceo_start_date:""}/>
               <KV label="Founder Status" val={!ni(r.founder_status)?r.founder_status:""}/>
               <KV label="Ownership" val={OWN_LABEL[r.ownership_category]||r.ownership_category}/>
             </div>
@@ -2120,16 +2110,12 @@ export default function App(){
   const parseTxt=()=>txt.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(",");return{company:p[0]?.trim(),ticker:p[1]?.trim()||""};}).filter(c=>c.company).slice(0,20);
 
   const run=async()=>{
-    // ── Hard reset — wipe all state before starting a new run ────────────────
-    // This clears React state, JS heap variables, and browser request cache
-    // so every run starts completely from scratch with no residual data.
     setErr("");
     setResults([]);
     setLogs([]);
     setSel(null);
     setProg({d:0,t:0});
 
-    // Force browser to discard any cached fetch responses for this session
     if (window.caches) {
       try {
         const keys = await window.caches.keys();
