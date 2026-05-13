@@ -300,12 +300,13 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
         console.log(`[CEO_OVERRIDE] Applying verified override for "${company}": CEO=${override.ceo}`);
         return `LIVE WEB SEARCH RESULTS:
 VERIFIED GROUND TRUTH for ${company} (manually confirmed, overrides web search):
-- Current CEO: ${override.ceo}
-- Departed CEO: ${override.departed}
+- Current CEO: ${override.ceo} (IN SEAT NOW — NOT departing, NOT leaving)
+- Departed CEO: ${override.departed} (they LEFT the CEO role — they are NOT the current CEO)
 - Note: ${override.note}
 - ceo_name = "${override.ceo}"
-- ceo_departure_announced = "yes"
-- incoming_ceo_announced = "no" (${override.ceo} is already in seat)
+- ceo_departure_announced = "no" (${override.ceo} is current CEO with no departure announced)
+- incoming_ceo_announced = "no"
+- The ONLY person who departed is ${override.departed}
 Today is ${today}.`;
       }
 
