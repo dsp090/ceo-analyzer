@@ -223,13 +223,17 @@ Q5. TRANSITION STATUS: What does the web say about the current CEO transition st
 REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowledge.`;
 
   // Only ONE call — web search only, no training fallback
-  // The second callLLM with webSearch=false has been removed because it
-  // caused training memory to override fresh web results
   try {
     const r1 = await callLLM(sys, prompt, true);
-    if (r1 && r1.length > 30) return "LIVE WEB SEARCH RESULTS:\n" + r1;
-  } catch {}
+    if (r1 && r1.length > 30) {
+      console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
+      return "LIVE WEB SEARCH RESULTS:\n" + r1;
+    }
+  } catch(e) {
+    console.error(`❌ [fetchCEONews] Web search call FAILED for "${company}":`, e.message);
+  }
 
+  console.warn(`⚠️ [fetchCEONews] Web search returned nothing for "${company}" — no fallback`);
   return `Web search returned no results for ${company}. Do not use training data.`;
 }
 
@@ -379,6 +383,14 @@ OWNERSHIP DETECTION GUIDE:
 
   const d = parseJSON(raw, fallback);
 
+  // ── DEBUG: show what the model extracted from web context ─────────────────
+  console.log(`\n🔍 [agentResearch] "${company}" extracted from web context:`);
+  console.log(`   CEO:       "${d.ceo_name}"`);
+  console.log(`   Departure: "${d.ceo_departure_announced}"`);
+  console.log(`   Successor: "${d.incoming_ceo_name}" (announced: ${d.incoming_ceo_announced})`);
+  console.log(`   Ownership: "${d.ownership_category}"`);
+  console.log(`   Raw JSON (first 300):`, raw.slice(0,300));
+
   // Clean and clamp all fields
   d.sector             = cl(d.sector, 8);
   d.ceo_name           = cl(d.ceo_name, 8);
@@ -438,7 +450,16 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
     }
     if (qc.ownership_correct === false && qc.correct_ownership) d.ownership_category = qc.correct_ownership;
     d._profile_qc = "verified";
-  } catch { d._profile_qc = "skipped"; }
+
+    // ── DEBUG: show what QC decided ──────────────────────────────────────────
+    console.log(`\n✅ [agentResearch QC] "${company}" after QC:`);
+    console.log(`   CEO before QC: "${d._ceo_name_pre_qc}"  →  after QC: "${d.ceo_name}"`);
+    console.log(`   QC said ceo_correct=${qc.ceo_correct} | successor_missing=${qc.successor_missing}`);
+    if(qc.ceo_correct === false) console.warn(`   ⚠️ QC CHANGED CEO from "${d._ceo_name_pre_qc}" to "${qc.correct_ceo}"`);
+  } catch(e) {
+    d._profile_qc = "skipped";
+    console.error(`❌ [agentResearch QC] "${company}" QC call FAILED:`, e.message);
+  }
 
   // ── POST-QC CLEANUP — runs after QC has corrected ceo_name ───────────────
   // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure (e.g. Asda/Lord Rose)
@@ -1107,8 +1128,21 @@ async function runPipeline(company, ticker, log) {
   const webCtx = await fetchCEONews(company);
   const finCtx = await fetchFinancialData(company, ticker);
 
+  // ── DEBUG: show what the web search actually returned ─────────────────────
+  console.log(`\n${"─".repeat(60)}`);
+  console.log(`🏢 PIPELINE START: "${company}"`);
+  console.log(`📡 Web context (first 400 chars):\n`, webCtx.slice(0,400));
+
   log(p=>[...p,`[${company}] 2/6 Profile Structuring — building CEO profile...`]);
   const data = await agentResearch(company, ticker, webCtx + "\n\nFINANCIAL DATA:\n" + finCtx);
+
+  // ── DEBUG: final CEO profile after all QC ─────────────────────────────────
+  console.log(`\n📋 FINAL PROFILE for "${company}":`);
+  console.log(`   CEO:        "${data.ceo_name}"  (pre-QC: "${data._ceo_name_pre_qc}")`);
+  console.log(`   Tenure:     ${data.ceo_tenure_years}yr  Start: ${data.ceo_start_date}`);
+  console.log(`   Departure:  ${data.ceo_departure_announced}  Successor: "${data.incoming_ceo_name}" (announced: ${data.incoming_ceo_announced})`);
+  console.log(`   Ownership:  ${data.ownership_category}`);
+
   if(data._profile_qc === "verified")
     log(p=>[...p,`[${company}]     ✓ Profile QC passed — CEO: ${data.ceo_name}${data.incoming_ceo_announced==="yes"?" · Successor: "+data.incoming_ceo_name:""}${data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name ? " · Departed: "+data._ceo_name_pre_qc : ""}`]);
   if(data.ceo_departure_announced==="yes")
@@ -1136,6 +1170,12 @@ async function runPipeline(company, ticker, log) {
     log(p=>[...p,`[${company}]     ✓ Self-challenge held — ${pred.prediction} (${pred.confidence} confidence)`]);
 
   log(p=>[...p,`[${company}] ✅ Complete`]);
+
+  // ── DEBUG: final summary ──────────────────────────────────────────────────
+  console.log(`\n🏁 FINAL RESULT for "${company}":`);
+  console.log(`   CEO: "${data.ceo_name}" | Prediction: ${pred.prediction} | Confidence: ${pred.confidence}`);
+  console.log(`   Rationale: "${pred.analytical_rationale.slice(0,150)}..."`);
+  console.log(`${"─".repeat(60)}\n`);
 
   const finalPred = pred;
   const validation = {
