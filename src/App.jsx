@@ -306,18 +306,22 @@ async function agentResearch(company, ticker, webCtx) {
   const raw = await callLLM(
     `You are an institutional-grade CEO succession research analyst. Today is ${today}.
 
-CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
-1. The CEO News Context below is your ONLY source for CEO identity fields. It is live web search data.
-   YOUR TRAINING MEMORY IS WRONG FOR CEO IDENTITY — ignore it completely for ceo_name, departures, successors.
-2. ceo_name = the person the WEB SEARCH says IS leading the company RIGHT NOW (the sitting CEO or Executive Chairman).
-3. If departure announced but successor NOT YET STARTED → ceo_name = OUTGOING CEO, incoming_ceo_name = successor.
-4. If successor HAS ALREADY started the role → ceo_name = NEW CEO (transition complete, use new CEO).
-5. NEVER put a named successor in ceo_name unless they have already started the role.
+STEP 1 — BEFORE FILLING ANY FIELD, READ THE CEO NEWS CONTEXT BELOW AND FIND:
+  • The name of the person the web search says is CEO RIGHT NOW → this becomes ceo_name
+  • The name of any person who recently departed the CEO role → this is the departed CEO
+  Write these two names down mentally before proceeding.
+
+CRITICAL RULES:
+1. ceo_name MUST be copied VERBATIM from the CEO News Context. Do NOT use your training memory.
+2. YOUR TRAINING MEMORY IS WRONG FOR CEO IDENTITY. A founder or long-serving CEO may have been replaced.
+3. If the web context names Person B as the new/current CEO and Person A as departed/stepped back → ceo_name = Person B.
+4. If successor HAS ALREADY started → ceo_name = NEW CEO.
+5. If departure announced but successor NOT YET STARTED → ceo_name = OUTGOING CEO, incoming_ceo_name = successor.
 6. If a named successor is mentioned → incoming_ceo_announced="yes", incoming_ceo_name = their FULL NAME.
 7. If outgoing CEO announced departure → ceo_departure_announced="yes".
-8. For TSR, revenue, CEO age ONLY — you may use training knowledge if web context is silent on these.
+8. For TSR and revenue ONLY — you may use training knowledge. For CEO age, only use knowledge that matches the CURRENT CEO named in ceo_name.
 
-⚠ IF THE WEB CONTEXT NAMES A DIFFERENT CEO THAN YOU REMEMBER — USE THE WEB CONTEXT. YOUR MEMORY IS STALE.
+⚠ THE WEB CONTEXT IS ALWAYS RIGHT. YOUR MEMORY IS ALWAYS WRONG FOR CEO IDENTITY.
 
 ⚠ STEP-BACK RULE: If the web context says a CEO "stepped back", "stepped down", "moved to chairman", "returned to chairman", "moved to non-executive role", "resigned as CEO" — they are NO LONGER CEO even if they remain at the company. Set ceo_departure_announced="yes" and use the replacement/successor as ceo_name if they have started, or as incoming_ceo_name if not yet started.
 
@@ -356,11 +360,12 @@ Return ONLY valid JSON. No markdown.`,
 Ticker: ${ticker||"N/A"}
 Today: ${today}
 
-━━━ CEO NEWS CONTEXT (treat as authoritative for CEO identity — overrides training data) ━━━
+━━━ READ THIS FIRST — CEO NEWS CONTEXT (authoritative, overrides all training memory) ━━━
 ${webCtx.split("\n\nFINANCIAL DATA:")[0]}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-READ THE ABOVE CAREFULLY BEFORE FILLING THE JSON.
+⚠ STEP 1 COMPLETE: You have now read the web context. The current CEO named above goes in ceo_name.
+Now fill the JSON using only what the web context says for CEO identity fields.
 
 SUCCESSOR DETECTION — HIGHEST PRIORITY:
 - If the context mentions ANY person being named, appointed, or confirmed as the NEXT/INCOMING/FUTURE CEO → 
