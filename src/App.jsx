@@ -2,7 +2,21 @@
 // PATCH 1: x-portkey-cache-force-refresh header added to callLLM
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
 import { useState, useRef, useEffect } from "react";
-import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.mjs";
+
+// SheetJS loaded via script tag for reliable global access
+// ESM import of xlsx.mjs can fail to expose XLSX.read in some bundler configs
+let XLSX = null;
+async function loadXLSX() {
+  if (XLSX) return XLSX;
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) { XLSX = window.XLSX; return resolve(XLSX); }
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+    s.onload  = () => { XLSX = window.XLSX; resolve(XLSX); };
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
 
 // ── Global styles ─────────────────────────────────────────────────────────────
 const injectGlobalStyle = () => {
@@ -37,7 +51,20 @@ const PORTKEY_KEY = "2bayMIyF+J3J0aJtcc4i1HvrfLAS";
 const MODEL       = "@ceo-coe/gpt-4o-search-preview";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const ni  = v => !v || String(v).toLowerCase().includes("not clearly");
+const ni  = v => {
+  if(!v) return true;
+  const s = String(v).toLowerCase().trim();
+  return s.includes("not clearly") ||
+         s.includes("not publicly") ||
+         s.includes("not available") ||
+         s.includes("not disclosed") ||
+         s.includes("not inferable") ||
+         s.includes("unknown") ||
+         s === "n/a" ||
+         s === "na" ||
+         s === "-" ||
+         s === "";
+};
 const cl  = (t, n=25) => { if(!t) return ""; const w=String(t).replace(/[\n\r]/g," ").trim().split(/\s+/); return w.length<=n?w.join(" "):w.slice(0,n).join(" ").replace(/[,;:-]$/,"")+"..."; };
 const lst = (a, n=4, w=20) => Array.isArray(a)?[...new Set(a.map(x=>cl(x,w)).filter(Boolean))].slice(0,n):[];
 const joinCompact = (items, sep=" | ", n=25) => cl(items.filter(Boolean).map(String).map(s=>s.trim()).filter(Boolean).join(sep), n);
@@ -161,7 +188,7 @@ async function fetchFinancialData(company, ticker) {
 
   const prompt = `Today is ${today}. I need specific financial performance data for "${company}" (${ticker||""}).
 
-IMPORTANT: Use your training knowledge. For well-known public companies you KNOW these numbers. Do not say "not available".
+IMPORTANT: Use your web search to find the latest figures. Provide actual numbers — do not say "not available".
 
 Answer each question with an actual number or percentage:
 
@@ -174,9 +201,7 @@ Answer each question with an actual number or percentage:
 7. ANALYST VIEW: Current consensus — Buy/Hold/Sell? Any major recent downgrades?
 8. KEY FINANCIAL RISK: What is the single biggest financial concern for this company right now?
 
-For Apple (AAPL): You know revenue is ~$391bn, TSR has lagged vs mega-cap AI peers, etc.
-For Microsoft (MSFT): You know revenue, strong cloud growth, TSR has been strong.
-Give real numbers for any company you have knowledge of.`;
+Give real numbers based on your web search results. If web search returns no data, use your best knowledge.`;
 
   try {
     const r = await callLLM(
@@ -212,13 +237,27 @@ If you cannot find current information via web search, say "not found in web sea
 
 Do NOT use your training memory. Search the web and report ONLY what you find there.
 
-Search for: "${company} CEO 2024 2025" and "${company} CEO successor announced"
+Search for ALL of these queries:
+1. "${company} CEO ${yr}"
+2. "${company} CEO ${yr-1}"
+3. "${company} CEO steps down resigned left replaced ${yr}"
+4. "${company} CEO steps down resigned left replaced ${yr-1}"
+5. "${company} new CEO appointed ${yr}"
+6. "${company} CEO successor announced"
 
-Q1. CURRENT CEO: Who does the web say is the CEO of "${company}" right now? Full name + start date.
-Q2. SUCCESSOR ANNOUNCED: Does the web show a named successor/incoming CEO? Yes/No. If yes: full name, role, start date.
-Q3. CEO CHANGE IN ${yr} or ${yr-1}: Does the web show a recent CEO change? Old name + new name + date.
-Q4. DEPARTURE ANNOUNCED: Does the web show the CEO has announced departure/retirement? Yes/No + details.
-Q5. TRANSITION STATUS: What does the web say about the current CEO transition status?
+⚠ CRITICAL ORDERING RULE — READ CAREFULLY:
+- The CURRENT CEO is the person IN THE ROLE RIGHT NOW as of ${today}.
+- The DEPARTED CEO is the person who PREVIOUSLY held the role and has since LEFT.
+- If person A was CEO, then person B was appointed as NEW CEO → B is CURRENT, A is DEPARTED.
+- Do NOT confuse the order. The most RECENTLY appointed person is the CURRENT CEO.
+- A CEO who moves to chairman, advisory, or non-executive role is NO LONGER CEO.
+
+Q1. CURRENT CEO: Who is the CEO of "${company}" RIGHT NOW as of ${today}? Full name + start date.
+     The CURRENT CEO is the most recently appointed person — not the previous one.
+Q2. PREVIOUS/DEPARTED CEO: Who was CEO before the current one? Name + when they left.
+Q3. SUCCESSOR ANNOUNCED: Is there a named incoming CEO not yet started? Yes/No. If yes: full name, start date.
+Q4. DEPARTURE: Has any departure/step-back/resignation been announced? Yes/No + details.
+Q5. TRANSITION STATUS: Is a transition underway, complete, or none?
 
 REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowledge.`;
 
@@ -271,9 +310,16 @@ CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
 
 ⚠ IF THE WEB CONTEXT NAMES A DIFFERENT CEO THAN YOU REMEMBER — USE THE WEB CONTEXT. YOUR MEMORY IS STALE.
 
-EXAMPLE: "Bob Iger to retire, Josh D'Amaro named as next CEO, starts 2026"
-→ ceo_name="Bob Iger", ceo_departure_announced="yes", incoming_ceo_announced="yes", incoming_ceo_name="Josh D'Amaro"
-NEVER: ceo_name="Josh D'Amaro" (he has not started yet)
+⚠ STEP-BACK RULE: If the web context says a CEO "stepped back", "stepped down", "moved to chairman", "moved to non-executive role", "resigned as CEO" — they are NO LONGER CEO even if they remain at the company. Set ceo_departure_announced="yes" and use the replacement as ceo_name if they have started, or as incoming_ceo_name if not yet started.
+
+⚠ ORDERING RULE — CRITICAL: If the web context describes a leadership change where Person A was replaced by Person B:
+- ceo_name = Person B (the NEW/CURRENT CEO — most recently appointed)
+- The DEPARTED field refers to Person A (the OLD CEO who left)
+- NEVER swap these. The NEWER appointment = current CEO.
+
+EXAMPLE: "CEO A announced retirement, CEO B named as successor, starts 2026"
+→ ceo_name="CEO A", ceo_departure_announced="yes", incoming_ceo_announced="yes", incoming_ceo_name="CEO B"
+NEVER: ceo_name="CEO B" (they have not started yet)
 
 Return ONLY valid JSON. No markdown.`,
     `Company: ${company}
@@ -368,15 +414,15 @@ Field constraints:
 - ceo_age: integer — USE YOUR KNOWLEDGE, do not return "not publicly disclosed" for well-known CEOs
 - All list fields: max 4 items, 20 words each
 
-CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST use your training knowledge to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you know.
+CRITICAL: For major public companies you MUST use your web search to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you can find.
 
 OWNERSHIP DETECTION GUIDE:
-- founder_ceo: current CEO is also the founder (e.g. Elon Musk at Tesla)
-- family_ceo: CEO is a family member of the founding family (e.g. Arnault at LVMH)
+- founder_ceo: current CEO is also the founder of the company
+- family_ceo: CEO is a family member of the founding family
 - founder_family_control_non_ceo: founder or founding family controls the company but the sitting CEO is NOT a family member
-- family_majority_owned: a family holds a majority or controlling stake but are NOT the founder — the family accumulated or inherited a controlling position (e.g. Walmart controlled by the Walton family, Porsche/VW controlled by Porsche-Piëch family, Hermès controlled by the Hermès family, Reliance controlled by the Ambani family) — the CEO may or may not be a family member
-- private_equity_owned: company is majority-owned by a PE firm (e.g. Asda owned by TDR Capital/Issa brothers, Boots owned by KKR, Morrisons owned by SoftBank/CD&R) — use this if the company is NOT publicly listed OR is majority PE-backed
-- government_controlled: government holds controlling stake but company may be listed
+- family_majority_owned: a family holds a majority or controlling stake — the family accumulated or inherited a controlling position — the CEO may or may not be a family member
+- private_equity_owned: company is majority-owned by a PE firm — use this if the company is NOT publicly listed OR is majority PE-backed
+- government_controlled: government holds a controlling stake but company may be listed
 - state_owned_enterprise: fully government owned
 - professionally_managed: publicly listed with no single controlling shareholder — succession is driven by board and market pressure`
   );
@@ -462,7 +508,7 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
   }
 
   // ── POST-QC CLEANUP — runs after QC has corrected ceo_name ───────────────
-  // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure (e.g. Asda/Lord Rose)
+  // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure
   // is correctly treated as a completed transition, not a pending one.
   const _tenureNum = parseFloat(String(d.ceo_tenure_years).replace("~",""));
   if (!isNaN(_tenureNum) && _tenureNum <= 1.5) {
@@ -689,7 +735,15 @@ concerns: up to 2 specific risks
 async function agentPrediction(data, finance, press, industry) {
   const fallback = { prediction:"low_likelihood", confidence:"low", analytical_rationale:"" };
 
-  const rationaleCEO = data._ceo_name_pre_qc || data.ceo_name;
+  // rationaleCEO = the CEO the rationale should reference.
+  // If a departure was announced: rationale is about the DEPARTING CEO.
+  // If transition is complete: _ceo_name_pre_qc is the old/departed CEO.
+  // If no transition: rationaleCEO = current CEO.
+  const rationaleCEO = (data._transition_complete || data.ceo_departure_announced === "yes")
+    && data._ceo_name_pre_qc
+    && data._ceo_name_pre_qc !== data.ceo_name
+      ? data._ceo_name_pre_qc
+      : data.ceo_name;
 
   const solidProofOfChange = (
     data.ceo_departure_announced === "yes" ||
@@ -1212,9 +1266,25 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
-      ? data._ceo_name_pre_qc
-      : "",
+    // departed_ceo_name = the person who LEFT the CEO role
+    // Rule: if _ceo_name_pre_qc differs from ceo_name, one of them departed.
+    // The DEPARTED one is whoever is NOT the current sitting CEO (data.ceo_name).
+    // If _transition_complete=true, the pre-QC name was the old CEO who left.
+    // Guard: never show departed = current ceo_name (would be self-referential).
+    departed_ceo_name: (() => {
+      const preQC   = data._ceo_name_pre_qc || "";
+      const current = data.ceo_name || "";
+      if (!preQC || preQC === current) return "";
+      // preQC and current differ — preQC is the one the LLM originally found.
+      // If transition is complete, preQC = old CEO who departed, current = new CEO. ✓
+      // If preQC is actually the new CEO (LLM error corrected by QC), then
+      // current = old CEO still in seat — in that case there is no departed yet.
+      // We detect this by checking: if transition_complete=true, preQC=departed.
+      // Otherwise if departure_announced=yes and preQC≠current, preQC=departed.
+      if (data._transition_complete) return preQC;
+      if (data.ceo_departure_announced === "yes") return preQC;
+      return "";
+    })(),
     transition_complete: data._transition_complete || false,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
     revenue:normaliseRevenue(finance.revenue||data.revenue),
@@ -1269,7 +1339,8 @@ async function runPipeline(company, ticker, log) {
 }
 
 // ── Export to XLSX (SheetJS compatible) ──────────────────────────────────────
-function exportToExcel(results) {
+async function exportToExcel(results) {
+  const XL = await loadXLSX();
   const PRED_LABEL_MAP = {
     new_ceo_appointed:"New CEO Appointed", transition_underway:"Transition Underway",
     high_likelihood:"High Likelihood", medium_likelihood:"Medium Likelihood",
@@ -1362,7 +1433,7 @@ function exportToExcel(results) {
   const getVal  = (r, c) => flatten(c.fmt ? c.fmt(r[c.key]??"") : (r[c.key]??""));
 
   // ── Sheet 1: Full data ────────────────────────────────────────────────────
-  const wb = XLSX.utils.book_new();
+  const wb = XL.utils.book_new();
 
   // Row 0: title
   // Row 1: section headers
@@ -1381,7 +1452,7 @@ function exportToExcel(results) {
   const dataRows = results.map(r => allCols.map(c => getVal(r,c)));
 
   const wsData = [titleRow, sectRow, headerRow, ...dataRows];
-  const ws     = XLSX.utils.aoa_to_sheet(wsData);
+  const ws     = XL.utils.aoa_to_sheet(wsData);
 
   // Column widths
   ws["!cols"] = allCols.map(c => ({ wch: c.w || 20 }));
@@ -1398,7 +1469,7 @@ function exportToExcel(results) {
   ws["!freeze"] = { xSplit:2, ySplit:3, topLeftCell:"C4", activePane:"bottomRight" };
 
   // Autofilter on column header row
-  ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s:{r:2,c:0}, e:{r:2,c:allCols.length-1} }) };
+  ws["!autofilter"] = { ref: XL.utils.encode_range({ s:{r:2,c:0}, e:{r:2,c:allCols.length-1} }) };
 
   // Merge title row across all columns
   const merges = [{ s:{r:0,c:0}, e:{r:0,c:allCols.length-1} }];
@@ -1410,7 +1481,7 @@ function exportToExcel(results) {
   }
   ws["!merges"] = merges;
 
-  XLSX.utils.book_append_sheet(wb, ws, "CEO Succession Analysis");
+  XL.utils.book_append_sheet(wb, ws, "CEO Succession Analysis");
 
   // ── Sheet 2: Summary ─────────────────────────────────────────────────────
   const predOrder  = ["New CEO Appointed","Transition Underway","High Likelihood","Medium Likelihood","Low Likelihood"];
@@ -1437,7 +1508,7 @@ function exportToExcel(results) {
     ...results.map(r=>[
       r.company||"",
       r.ceo_name||"",
-      r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"",
+      r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years}yr`:"",
       PRED_LABEL_MAP[r.prediction]||r.prediction||"",
       r.confidence||"",
       r.revenue||"",
@@ -1447,12 +1518,12 @@ function exportToExcel(results) {
     ]),
   ];
 
-  const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
+  const ws2 = XL.utils.aoa_to_sheet(s2Data);
   ws2["!cols"] = [{wch:32},{wch:22},{wch:14},{wch:24},{wch:14},{wch:14},{wch:12},{wch:22},{wch:18}];
-  XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+  XL.utils.book_append_sheet(wb, ws2, "Summary");
 
   // ── Download ──────────────────────────────────────────────────────────────
-  XLSX.writeFile(wb, `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.xlsx`);
+  XL.writeFile(wb, `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 // ── UI Components ─────────────────────────────────────────────────────────────
@@ -1610,7 +1681,7 @@ function Detail({r}){
           {[
             ["CEO",r.ceo_name],
             ["Age",!ni(r.ceo_age)?r.ceo_age:"—"],
-            ["Tenure",r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"—"],
+            ["Tenure",r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years}yr`:"—"],
             ["Successor",r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"?r.incoming_ceo_name:"—"],
             ["TSR 1yr",!ni(r.tsr_1yr)?r.tsr_1yr:"—"]
           ].map(([l,v])=>(
@@ -1672,8 +1743,7 @@ function Detail({r}){
               <KV label="TSR vs Peers" val={!ni(r.tsr_vs_peers)?r.tsr_vs_peers:""}/>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
-              <KV label="CEO Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
-              <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
+              <KV label="CEO Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>              <KV label="CEO Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
               <KV label="Contract Expiry" val={!ni(r.ceo_contract_expiry)?r.ceo_contract_expiry:""} hi={r.ceo_contract_expiry&&!ni(r.ceo_contract_expiry)}/>
               <KV label="Activist Investors" val={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())?r.activist_investors:""} hi={r.activist_investors&&!ni(r.activist_investors)&&!["none","no"].includes(String(r.activist_investors).toLowerCase())}/>
             </div>
@@ -1782,8 +1852,7 @@ function Detail({r}){
               <KV label="CEO Name" val={r.ceo_name}/>
               {r.departed_ceo_name&&<KV label="Departed CEO" val={r.departed_ceo_name}/>}
               <KV label="Age" val={!ni(r.ceo_age)?r.ceo_age:""}/>
-              <KV label="Tenure" val={r.ceo_tenure_years?`${r.ceo_tenure_years} years`:""}/>
-              <KV label="Start Date" val={!ni(r.ceo_start_date)?r.ceo_start_date:""}/>
+              <KV label="Tenure" val={r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?`${r.ceo_tenure_years} years`:""}/>              <KV label="Start Date" val={!ni(r.ceo_start_date)?r.ceo_start_date:""}/>
               <KV label="Founder Status" val={!ni(r.founder_status)?r.founder_status:""}/>
               <KV label="Ownership" val={OWN_LABEL[r.ownership_category]||r.ownership_category}/>
             </div>
@@ -1980,7 +2049,7 @@ function CRow({r,idx,sel,onClick}){
         <div style={{width:24,height:24,borderRadius:5,background:isH?"rgba(192,0,0,0.08)":"#F3F4F6",color:isH?C.red:C.mid,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{idx+1}</div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:600,fontSize:13,color:sel?C.red:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.company}</div>
-          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.ceo_name||"—"}{r.ceo_tenure_years?` · ${r.ceo_tenure_years}yr`:""}{r.departed_ceo_name?` · prev: ${r.departed_ceo_name}`:""}</div>
+          <div style={{fontSize:11,color:C.mid,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.ceo_name||"—"}{r.ceo_tenure_years&&!ni(r.ceo_tenure_years)?` · ${r.ceo_tenure_years}yr`:""}{r.departed_ceo_name?` · prev: ${r.departed_ceo_name}`:""}</div>
         </div>
         <PredBadge pred={r.prediction} sm/>
       </div>
@@ -2017,11 +2086,11 @@ export default function App(){
     const isExcel = /\.(xlsx|xls|xlsm)$/i.test(f.name);
     try {
       if(isExcel){
-        // SheetJS 0.18.5 accepts ArrayBuffer directly with type:"array"
-        const buf = await f.arrayBuffer();
-        const wb  = XLSX.read(buf, {type:"array"});
+        const XL   = await loadXLSX();
+        const buf  = await f.arrayBuffer();
+        const wb   = XL.read(new Uint8Array(buf));
         const ws   = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+        const rows = XL.utils.sheet_to_json(ws, {header:1, defval:""});
         const header = rows[0]?.map(h=>String(h).toLowerCase().trim()) || [];
         const compIdx = header.findIndex(h=>h.includes("company")||h.includes("name"));
         const tickIdx = header.findIndex(h=>h.includes("ticker")||h.includes("symbol")||h.includes("tick"));
@@ -2034,10 +2103,7 @@ export default function App(){
         const rows=t.split("\n").map(r=>r.split(",").map(c=>c.trim().replace(/^"|"$/g,"")));
         setFileCos(rows.filter(r=>r[0]&&r[0].toLowerCase()!=="company").map(r=>({company:r[0],ticker:r[1]||""})).slice(0,100));
       }
-    } catch(err){
-      console.error("File parse error:", err);
-      setErr("File parse error: "+err.message);
-    }
+    } catch(e){setErr("File parse error: "+e.message);}
   };
 
   const parseTxt=()=>txt.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(",");return{company:p[0]?.trim(),ticker:p[1]?.trim()||""};}).filter(c=>c.company).slice(0,20);
@@ -2150,7 +2216,7 @@ export default function App(){
                 {iTab==="manual"?(
                   <>
                     <textarea value={txt} onChange={e=>setTxt(e.target.value)} rows={3}
-                      placeholder={"Apple Inc, AAPL\nMicrosoft, MSFT\nBabcock International, BAB"}
+                      placeholder={"Company Name, TICKER\nAnother Company, TICK\nThird Company, TIC"}
                       style={{flex:1,borderRadius:5,border:`1px solid ${C.border}`,padding:"8px 12px",fontSize:13,color:C.ink,background:C.white,fontFamily:"'Inter',monospace",resize:"none",lineHeight:1.6}}
                     />
                     <div style={{fontSize:12,color:C.mid,lineHeight:2,whiteSpace:"nowrap",flexShrink:0}}>One per line<br/>Name, TICKER<br/>Max 20</div>
