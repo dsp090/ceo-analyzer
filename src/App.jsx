@@ -275,25 +275,7 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
     if (r1 && r1.length > 30) {
       console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
 
-      // Second targeted search — specifically asks "who holds the CEO title right now"
-      // This catches cases where the first search returns transition news but not the
-      // definitive current title holder (e.g. multi-step transitions)
-      let r2 = "";
-      try {
-        r2 = await callLLM(
-          `You are a corporate intelligence expert. Today is ${today}.
-USE YOUR WEB SEARCH TOOL. Search for who CURRENTLY leads this company right now.
-Focus only on the most recent information. Return a short factual answer.
-NOTE: "Executive Chairman" who runs the business day-to-day should be treated as the current CEO.`,
-          `SEARCH: Who is the current CEO or Executive Chairman of "${company}" as of ${today}?
-Search for: "${company} CEO Executive Chairman ${yr}"
-Return: Full name of current leader, their title, their start date.`,
-          true
-        );
-      } catch {}
-
-      const combined = r1 + (r2 ? `\n\n--- VERIFICATION SEARCH ---\n${r2}` : "");
-      return "LIVE WEB SEARCH RESULTS:\n" + combined;
+      return "LIVE WEB SEARCH RESULTS:\n" + r1;
     }
   } catch(e) {
     console.error(`❌ [fetchCEONews] Web search call FAILED for "${company}":`, e.message);
@@ -374,8 +356,8 @@ Return ONLY valid JSON. No markdown.`,
 Ticker: ${ticker||"N/A"}
 Today: ${today}
 
-━━━ CEO NEWS CONTEXT (treat as authoritative — overrides training data) ━━━
-${webCtx}
+━━━ CEO NEWS CONTEXT (treat as authoritative for CEO identity — overrides training data) ━━━
+${webCtx.split("\n\nFINANCIAL DATA:")[0]}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 READ THE ABOVE CAREFULLY BEFORE FILLING THE JSON.
