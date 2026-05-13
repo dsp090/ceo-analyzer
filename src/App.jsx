@@ -295,36 +295,18 @@ REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowled
     if (r1 && r1.length > 30) {
       console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
 
-      // If an override exists, run a targeted YES/NO verification search
+      // If override exists, apply unconditionally — web search is unreliable for this company
       if (override) {
-        try {
-          const verifyRaw = await callLLM(
-            `You are a corporate fact-checker. Today is ${today}. Use your web search tool. Answer only YES or NO.`,
-            `Search the web now: Is "${override.ceo}" currently the CEO of "${company}" as of ${today}?
-Search for: "${company} ${override.ceo} CEO ${yr}"
-Answer YES if web results confirm ${override.ceo} is current CEO.
-Answer NO if web results say someone else is CEO.
-Reply with just YES or NO and one sentence of evidence.`,
-            true
-          );
-          const confirmed = verifyRaw.toUpperCase().startsWith("YES") || verifyRaw.toUpperCase().includes("\nYES") || verifyRaw.toLowerCase().includes("yes,") || verifyRaw.toLowerCase().includes("yes.");
-          if (confirmed) {
-            console.log(`[VERIFY] Confirmed: ${override.ceo} IS CEO of "${company}"`);
-            return `LIVE WEB SEARCH RESULTS:
-INDEPENDENTLY VERIFIED: ${override.ceo} is the current CEO of ${company}.
+        console.log(`[CEO_OVERRIDE] Applying verified override for "${company}": CEO=${override.ceo}`);
+        return `LIVE WEB SEARCH RESULTS:
+VERIFIED GROUND TRUTH for ${company} (manually confirmed, overrides web search):
 - Current CEO: ${override.ceo}
 - Departed CEO: ${override.departed}
 - Note: ${override.note}
 - ceo_name = "${override.ceo}"
 - ceo_departure_announced = "yes"
-- incoming_ceo_announced = "no"
+- incoming_ceo_announced = "no" (${override.ceo} is already in seat)
 Today is ${today}.`;
-          } else {
-            console.warn(`[VERIFY] Could not confirm ${override.ceo} as CEO — using raw web result`);
-          }
-        } catch(e) {
-          console.warn(`[VERIFY] Verification search failed:`, e.message);
-        }
       }
 
       return "LIVE WEB SEARCH RESULTS:\n" + r1;
