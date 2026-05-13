@@ -1,6 +1,8 @@
-// v7-agents build
+// v8-agents build — FIXED: tenure<=1.5yr clears all transition flags (was <1.5)
+// PATCH 1: x-portkey-cache-force-refresh header added to callLLM
+// PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
 import { useState, useRef, useEffect } from "react";
-import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.mjs";
+import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
 
 // ── Global styles ─────────────────────────────────────────────────────────────
 const injectGlobalStyle = () => {
@@ -51,7 +53,7 @@ const calcTenure = s => {
 
 const PRED_COLOR = {new_ceo_appointed:"#C00000",transition_underway:"#C00000",high_likelihood:"#C00000",medium_likelihood:"#8A5A00",low_likelihood:"#1A6B3C"};
 const PRED_LABEL = {new_ceo_appointed:"New CEO Appointed",transition_underway:"Transition Underway",high_likelihood:"High Likelihood",medium_likelihood:"Medium Likelihood",low_likelihood:"Low Likelihood"};
-const OWN_LABEL  = {founder_ceo:"Founder CEO",family_ceo:"Family CEO",founder_family_control_non_ceo:"Family Control",government_controlled:"Gov. Controlled",state_owned_enterprise:"State-Owned",professionally_managed:"Prof. Managed",unclear:"Unclear"};
+const OWN_LABEL  = {founder_ceo:"Founder CEO",family_ceo:"Family CEO",founder_family_control_non_ceo:"Family Control",family_majority_owned:"Family Majority",government_controlled:"Gov. Controlled",state_owned_enterprise:"State-Owned",private_equity_owned:"PE-Owned",professionally_managed:"Prof. Managed",unclear:"Unclear"};
 const VIEW_LABEL = {high_influence:"High Influence",medium_influence:"Medium Influence",weak_influence:"Weak Influence",no_clear_influence:"No Clear Influence"};
 const VIEW_COLOR = {high_influence:"#C00000",medium_influence:"#B84400",weak_influence:"#8A5A00",no_clear_influence:"#1A6B3C"};
 const isHighPred = p => ["new_ceo_appointed","transition_underway","high_likelihood"].includes(p);
@@ -84,23 +86,72 @@ function normaliseRevenue(s) {
 }
 
 // ── Portkey call ──────────────────────────────────────────────────────────────
+// Cache-bust strategy (4 layers):
+//   1. x-portkey-cache: no-cache         — tells Portkey never to serve cached response
+//   2. x-portkey-cache-force-refresh     — bypasses any existing cached entry
+//   3. nonce in sys prompt               — unique token fingerprint per call
+//   4. CURRENT TIME in user prompt       — makes prompt string unique every call
 async function callLLM(sys, usr, webSearch=false) {
+  const now   = new Date();
+  const ts    = now.toTimeString().slice(0,8);
+  const nonce = `[REQ-${Date.now()}-${Math.random().toString(36).slice(2,7)}]`;
+
+  // ── What we are sending ───────────────────────────────────────────────────
+  console.group(`%c🔵 callLLM [${nonce}] webSearch=${webSearch}`, "color:#3B82F6;font-weight:bold");
+  console.log("⏰ Time:",          ts);
+  console.log("📤 System (first 120):", sys.slice(0,120).replace(/\n/g," "));
+  console.log("📤 User (first 120):",   usr.slice(0,120).replace(/\n/g," "));
+
   const body = {
     model: MODEL,
-    messages: [{role:"system",content:sys},{role:"user",content:usr}],
+    messages: [
+      { role:"system", content:`${sys}\n\n${nonce}` },
+      { role:"user",   content:`CURRENT TIME: ${ts}\n\n${usr}` },
+    ],
     max_completion_tokens: 1024,
   };
   if(webSearch) {
     body.plugins = [{id:"webSearch"}];
   }
+
+  const t0 = Date.now();
   const r = await fetch(PORTKEY_URL, {
     method:"POST",
-    headers:{"Content-Type":"application/json","x-portkey-api-key":PORTKEY_KEY},
+    cache:"no-store",
+    headers:{
+      "Content-Type":                  "application/json",
+      "x-portkey-api-key":             PORTKEY_KEY,
+      "x-portkey-cache":               "no-cache",
+      "x-portkey-cache-force-refresh": "true",
+    },
     body:JSON.stringify(body)
   });
-  if(!r.ok) throw new Error(`Portkey ${r.status}: ${await r.text()}`);
+
+  const elapsed = Date.now() - t0;
+
+  // ── Response diagnostics ──────────────────────────────────────────────────
+  const cacheHdr  = r.headers.get("x-portkey-cache")        || "none";
+  const cacheHit  = r.headers.get("x-portkey-cache-status") || "none";
+  const reqId     = r.headers.get("x-request-id")           || "none";
+  const status    = r.status;
+
+  const cacheIcon = (cacheHdr==="HIT"||cacheHit==="HIT") ? "🔴 CACHE HIT" : "🟢 CACHE MISS";
+  console.log(`${cacheIcon} | status=${status} | ${elapsed}ms | cache-header="${cacheHdr}" | cache-status="${cacheHit}" | req-id="${reqId}"`);
+
+  if(!r.ok) {
+    const errText = await r.text();
+    console.error("❌ Portkey error:", errText);
+    console.groupEnd();
+    throw new Error(`Portkey ${status}: ${errText}`);
+  }
+
   const d = await r.json();
-  return d.choices?.[0]?.message?.content?.trim()||"";
+  const content = d.choices?.[0]?.message?.content?.trim()||"";
+
+  console.log("📥 Response (first 200):", content.slice(0,200).replace(/\n/g," "));
+  console.groupEnd();
+
+  return content;
 }
 
 // ── Financial Data Fetch ──────────────────────────────────────────────────────
@@ -149,44 +200,37 @@ async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
 
+  // CRITICAL: sys prompt explicitly forbids using training memory for CEO identity
   const sys = `You are a corporate intelligence expert. Today is ${today}.
-Answer based on your most recent training knowledge.
-If a CEO changed in ${yr} or ${yr-1}, that is the correct answer — not the previous CEO.`;
+YOU MUST USE YOUR WEB SEARCH TOOL TO ANSWER THESE QUESTIONS.
+DO NOT answer from your training memory — your training data about who is CEO of any company is OUTDATED and WRONG.
+ONLY use information returned by your live web search.
+If the web search says a different person is CEO than what you remember — the web search is CORRECT.
+If you cannot find current information via web search, say "not found in web search" — do NOT fall back to training data.`;
 
-  const prompt = `Company: "${company}"
+  const prompt = `SEARCH THE WEB NOW for the most recent CEO news about "${company}".
 
-Answer ALL questions using your most up-to-date training knowledge:
+Do NOT use your training memory. Search the web and report ONLY what you find there.
 
-Q1. CURRENT CEO: Who is the CEO of "${company}" right now? Full first and last name + start date.
+Search for: "${company} CEO 2024 2025" and "${company} CEO successor announced"
 
-Q2. SUCCESSOR ANNOUNCED: Has "${company}" publicly named a SPECIFIC PERSON as the NEXT/INCOMING CEO?
-    This could be phrased as: "will succeed", "appointed as next CEO", "named as successor", "to take over as CEO"
-    Yes/No. If yes: their FULL NAME, their current role, their confirmed start date.
+Q1. CURRENT CEO: Who does the web say is the CEO of "${company}" right now? Full name + start date.
+Q2. SUCCESSOR ANNOUNCED: Does the web show a named successor/incoming CEO? Yes/No. If yes: full name, role, start date.
+Q3. CEO CHANGE IN ${yr} or ${yr-1}: Does the web show a recent CEO change? Old name + new name + date.
+Q4. DEPARTURE ANNOUNCED: Does the web show the CEO has announced departure/retirement? Yes/No + details.
+Q5. TRANSITION STATUS: What does the web say about the current CEO transition status?
 
-Q3. CEO CHANGE IN ${yr} or ${yr-1}: Has there been an actual CEO change? Old name + new name + date.
+REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowledge.`;
 
-Q4. DEPARTURE ANNOUNCED: Has the current CEO formally said they are leaving/retiring/stepping down?
-    Yes/No. If yes: name, announcement date, effective date.
-
-Q5. TRANSITION STATUS: Is a CEO transition currently underway or formally planned?
-
-Examples of what to look for:
-- Any announcement: "X will succeed Y as CEO", "X named as next CEO", "X appointed incoming CEO"
-- Any press release, board announcement, or regulatory filing confirming a named successor
-- Any transition plan where a specific person is confirmed to take over
-
-ALWAYS check for successor announcements — this is the most important question like there is ceo annoucement for babcock ceo that is Harry Holt will be replacing David Lockwood and For apple Tim cook will step down and John Ternus will be the new ceo and PostNL has new ceo as well dont hallucinate deep dive dont miss edge cases like these these are some examples find similarly for other companies as well.`;
-
-  const results = [];
+  // Only ONE call — web search only, no training fallback
+  // The second callLLM with webSearch=false has been removed because it
+  // caused training memory to override fresh web results
   try {
     const r1 = await callLLM(sys, prompt, true);
-    if (r1 && r1.length > 30) results.push("SEARCH:\n" + r1);
+    if (r1 && r1.length > 30) return "LIVE WEB SEARCH RESULTS:\n" + r1;
   } catch {}
-  try {
-    const r2 = await callLLM(sys, prompt, false);
-    if (r2 && r2.length > 30) results.push("KNOWLEDGE:\n" + r2);
-  } catch {}
-  return results.length ? results.join("\n\n---\n\n") : `No data found for ${company}.`;
+
+  return `Web search returned no results for ${company}. Do not use training data.`;
 }
 
 // ── Agent 2: Research ─────────────────────────────────────────────────────────
@@ -211,14 +255,17 @@ async function agentResearch(company, ticker, webCtx) {
     `You are an institutional-grade CEO succession research analyst. Today is ${today}.
 
 CRITICAL RULES — READ CAREFULLY BEFORE FILLING ANY FIELD:
-1. The CEO News Context below is your PRIMARY source. It overrides your training data.
-2. ceo_name = the person who IS CEO RIGHT NOW (the sitting/current CEO).
+1. The CEO News Context below is your ONLY source for CEO identity fields. It is live web search data.
+   YOUR TRAINING MEMORY IS WRONG FOR CEO IDENTITY — ignore it completely for ceo_name, departures, successors.
+2. ceo_name = the person the WEB SEARCH says IS CEO RIGHT NOW (the sitting/current CEO).
 3. If departure announced but successor NOT YET STARTED → ceo_name = OUTGOING CEO, incoming_ceo_name = successor.
 4. If successor HAS ALREADY started the role → ceo_name = NEW CEO (transition complete, use new CEO).
 5. NEVER put a named successor in ceo_name unless they have already started the role.
 6. If a named successor is mentioned → incoming_ceo_announced="yes", incoming_ceo_name = their FULL NAME.
 7. If outgoing CEO announced departure → ceo_departure_announced="yes".
-8. Use training knowledge for TSR, revenue, CEO age — do not return "not clearly inferable" for major public companies.
+8. For TSR, revenue, CEO age ONLY — you may use training knowledge if web context is silent on these.
+
+⚠ IF THE WEB CONTEXT NAMES A DIFFERENT CEO THAN YOU REMEMBER — USE THE WEB CONTEXT. YOUR MEMORY IS STALE.
 
 EXAMPLE: "Bob Iger to retire, Josh D'Amaro named as next CEO, starts 2026"
 → ceo_name="Bob Iger", ceo_departure_announced="yes", incoming_ceo_announced="yes", incoming_ceo_name="Josh D'Amaro"
@@ -246,6 +293,11 @@ DEPARTURE DETECTION:
 - If context says CEO is stepping down, retiring, leaving, or not seeking re-election → ceo_departure_announced="yes"
 - IMPORTANT: Also set ceo_departure_announced="yes" if the context describes a CEO who HAS ALREADY left/departed
   and a new CEO is now in place — the departure still happened even if it is past tense.
+- CRITICAL: ceo_departure_announced="yes" means the PREVIOUS CEO departed — NOT the current one.
+  If the transition is already complete (new CEO is in seat), set ceo_departure_announced="yes" to record
+  that a change happened, but incoming_ceo_announced must be "no" (they already started, not incoming).
+  NEVER set both ceo_name AND incoming_ceo_name to the same person.
+  NEVER set incoming_ceo_name to the person who is already listed as ceo_name.
 
 CURRENT CEO:
 - Keep current CEO in ceo_name until their successor has actually STARTED
@@ -305,14 +357,24 @@ Return this exact JSON structure:
 }
 
 Field constraints:
-- ownership_category: founder_ceo | family_ceo | founder_family_control_non_ceo | government_controlled | state_owned_enterprise | professionally_managed | unclear
+- ownership_category: founder_ceo | family_ceo | founder_family_control_non_ceo | family_majority_owned | government_controlled | state_owned_enterprise | private_equity_owned | professionally_managed | unclear
 - ceo_departure_announced / incoming_ceo_announced: "yes" or "no" only
 - revenue: USD ONLY, format $XXbn (billions) or $XXXm (millions) — always convert to USD, never use €/£/¥. USE YOUR KNOWLEDGE, do not return "not clearly inferable" for major public companies
 - tsr_1yr / tsr_3yr: percentage e.g. "+12%" or "-8%" — USE YOUR KNOWLEDGE for well-known companies
 - ceo_age: integer — USE YOUR KNOWLEDGE, do not return "not publicly disclosed" for well-known CEOs
 - All list fields: max 4 items, 20 words each
 
-CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST use your training knowledge to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you know.`
+CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST use your training knowledge to fill revenue, TSR, CEO age. Do NOT return "not clearly inferable" for facts you know.
+
+OWNERSHIP DETECTION GUIDE:
+- founder_ceo: current CEO is also the founder (e.g. Elon Musk at Tesla)
+- family_ceo: CEO is a family member of the founding family (e.g. Arnault at LVMH)
+- founder_family_control_non_ceo: founder or founding family controls the company but the sitting CEO is NOT a family member
+- family_majority_owned: a family holds a majority or controlling stake but are NOT the founder — the family accumulated or inherited a controlling position (e.g. Walmart controlled by the Walton family, Porsche/VW controlled by Porsche-Piëch family, Hermès controlled by the Hermès family, Reliance controlled by the Ambani family) — the CEO may or may not be a family member
+- private_equity_owned: company is majority-owned by a PE firm (e.g. Asda owned by TDR Capital/Issa brothers, Boots owned by KKR, Morrisons owned by SoftBank/CD&R) — use this if the company is NOT publicly listed OR is majority PE-backed
+- government_controlled: government holds controlling stake but company may be listed
+- state_owned_enterprise: fully government owned
+- professionally_managed: publicly listed with no single controlling shareholder — succession is driven by board and market pressure`
   );
 
   const d = parseJSON(raw, fallback);
@@ -344,16 +406,18 @@ CRITICAL: For major public companies (Apple, Microsoft, Airbus etc), you MUST us
   if (computed) d.ceo_tenure_years = computed;
 
   // ── FIX 1: Snapshot the CEO name BEFORE QC can mutate it ─────────────────
-  // This is the name that rationale strings must use — it reflects who the
-  // research agent identified as the current/departing CEO from the news context.
-  // QC may later correct ceo_name to a different value, but rationale was
-  // written against this person.
   d._ceo_name_pre_qc = d.ceo_name;
 
-  // ── Embedded QC: verify CEO name + successor against model knowledge ──────
+  // ── Embedded QC: verify CEO name + successor against live web search ────────
+  // webSearch=true so QC uses fresh live data rather than training memory,
+  // preventing it from silently overwriting a correct web-sourced CEO name
+  // with a stale trained one.
   try {
     const qcRaw = await callLLM(
-      `You are a QC analyst. Today is ${today}. Verify the CEO profile data below with your training knowledge. Return ONLY valid JSON.`,
+      `You are a QC analyst. Today is ${today}.
+Verify the CEO profile data below using LIVE WEB SEARCH RESULTS — do NOT rely on your training memory for CEO identity.
+Your training data about who holds CEO roles may be outdated. The web search is the authoritative source.
+Return ONLY valid JSON.`,
       `Company: ${company} | Ticker: ${ticker||""}
 CEO Name in data: ${d.ceo_name}
 Successor in data: ${d.incoming_ceo_name}
@@ -363,7 +427,8 @@ Departure announced: ${d.ceo_departure_announced}
 2. Has a named successor been publicly announced that is missing from this data?
 3. Is the ownership category "${d.ownership_category}" correct?
 
-Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"correct_successor":"","ownership_correct":true/false,"correct_ownership":""}`
+Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"correct_successor":"","ownership_correct":true/false,"correct_ownership":""}`,
+      true  // webSearch=true — use live search, not training memory
     );
     const qc = parseJSON(qcRaw, {});
     if (qc.ceo_correct === false && qc.correct_ceo) d.ceo_name = qc.correct_ceo;
@@ -375,12 +440,20 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
     d._profile_qc = "verified";
   } catch { d._profile_qc = "skipped"; }
 
-  // ── FIX 1 continued: if QC changed ceo_name, also flag previous CEO ───────
-  // _ceo_name_pre_qc holds the research-stage name (the one the news context
-  // described as departing/current). Keep it unchanged so rationale strings
-  // always reference the person the departure signals actually apply to.
-  // If QC corrected to the NEW CEO (transition already complete), the pre-QC
-  // name is the departing CEO — exactly who belongs in the rationale.
+  // ── POST-QC CLEANUP — runs after QC has corrected ceo_name ───────────────
+  // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure (e.g. Asda/Lord Rose)
+  // is correctly treated as a completed transition, not a pending one.
+  const _tenureNum = parseFloat(String(d.ceo_tenure_years).replace("~",""));
+  if (!isNaN(_tenureNum) && _tenureNum <= 1.5) {
+    console.log("[v8 FIX] tenure",_tenureNum,"<= 1.5 — clearing all transition flags for",d.ceo_name);
+    d.incoming_ceo_announced  = "no";
+    d.incoming_ceo_name       = "N/A";
+    d.incoming_ceo_background = "N/A";
+    d.incoming_ceo_start_date = "N/A";
+    d.ceo_departure_announced = "no";
+    d._transition_complete    = true;
+    d._prior_ceo_departed     = "yes";
+  }
 
   return d;
 }
@@ -479,8 +552,8 @@ async function agentPress(data) {
 
   const raw = await callLLM(
     `You are a senior governance analyst and investor relations expert. Today is ${new Date().toDateString()}.
-Do a DEEP DIVE on external pressure signals for this company and CEO.
-Draw on your full knowledge of activist campaigns, proxy battles, shareholder letters, and press coverage.
+Do a DEEP DIVE on external pressure signals for this company and CEO using LIVE WEB SEARCH.
+Search for the most recent activist campaigns, proxy battles, regulatory probes, and press coverage.
 Return ONLY valid JSON.`,
 
     `Company: ${data.company||""}  |  Ticker: ${data.ticker||""}  |  Sector: ${data.sector}
@@ -488,7 +561,7 @@ CEO: ${data.ceo_name}  |  Age: ${data.ceo_age}  |  Tenure: ${data.ceo_tenure_yea
 TSR 1yr: ${data.tsr_1yr}  |  TSR vs peers: ${data.tsr_vs_peers}  |  Revenue: ${data.revenue}
 Known activist data: ${data.activist_investors}
 Known press signals: ${JSON.stringify(data.press_activism_signals)}
-IMPORTANT: Use your full training knowledge about this specific company. Search for any known activist campaigns, controversies, or governance issues for ${data.company||""} (${data.ticker||""}).
+IMPORTANT: Use LIVE WEB SEARCH to find the most current activist campaigns, controversies, or governance issues for ${data.company||""} (${data.ticker||""}).
 
 ━━━ DEEP DIVE TASKS ━━━
 1. ACTIVIST INVESTORS: Are there any known activist hedge funds or shareholders (e.g. Elliott, ValueAct, Cevian, Third Point, Starboard) with a stake in this company? What is their stated position?
@@ -514,7 +587,8 @@ concerns: up to 3 concrete external pressure risks
 controversies: up to 4 named events
 investor_activism: full summary of any named activist position and demands, or "None identified"
 
-⚠ CRITICAL: Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`
+⚠ CRITICAL: Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`,
+    true  // webSearch=true — live search for current activist/press signals
   );
 
   const r = parseJSON(raw, fallback);
@@ -534,14 +608,17 @@ investor_activism: full summary of any named activist position and demands, or "
   try {
     if (r.signals.length > 0 || r.investor_activism !== "None identified") {
       const chkRaw = await callLLM(
-        `You are a governance QC analyst. Return ONLY valid JSON.`,
+        `You are a governance QC analyst. Today is ${new Date().toDateString()}.
+Use LIVE WEB SEARCH to verify whether these activist/press claims are real and current.
+Return ONLY valid JSON.`,
         `Company: ${data.company||""}
 Activist/press signals reported: ${JSON.stringify(r.signals)}
 Investor activism detail: ${r.investor_activism}
 
 Are these activist claims specific and verifiable (named fund, named person, specific event)?
 Flag any that are generic, invented, or unverifiable.
-Return: {"all_specific":true/false,"generic_items":[],"confirmed_activist":""}`
+Return: {"all_specific":true/false,"generic_items":[],"confirmed_activist":""}`,
+        true  // webSearch=true — verify claims against live sources
       );
       const chk = parseJSON(chkRaw, {});
       if (chk.all_specific === false && Array.isArray(chk.generic_items)) {
@@ -591,26 +668,68 @@ concerns: up to 2 specific risks
 async function agentPrediction(data, finance, press, industry) {
   const fallback = { prediction:"low_likelihood", confidence:"low", analytical_rationale:"" };
 
-  // ── FIX 1: Use pre-QC name for all rationale strings ─────────────────────
-  // _ceo_name_pre_qc is the name the research agent found in the news context
-  // for the departing/current CEO. QC may have updated ceo_name to the new CEO
-  // who has already taken over — but the rationale about departure/succession
-  // must reference whoever the departure signals actually belong to.
   const rationaleCEO = data._ceo_name_pre_qc || data.ceo_name;
-
-  const isFamily = ["founder_ceo","family_ceo","founder_family_control_non_ceo"].includes(data.ownership_category);
 
   const solidProofOfChange = (
     data.ceo_departure_announced === "yes" ||
     data.incoming_ceo_announced === "yes"
   );
 
-  // Rule 1: Family/founder CEO — structurally low unless hard proof of change
-  if (isFamily && !solidProofOfChange) {
+  // ── Rule 1a: Family / Founder-led — structurally low ─────────────────────
+  // The founding family or founder controls the board and makes succession
+  // decisions on their own timeline. External pressure, TSR underperformance,
+  // and analyst opinion do not drive CEO changes here.
+  const isFounderFamily = [
+    "founder_ceo",
+    "family_ceo",
+    "founder_family_control_non_ceo",
+    "family_majority_owned",
+  ].includes(data.ownership_category);
+
+  if (isFounderFamily && !solidProofOfChange) {
+    const ownershipDesc = {
+      founder_ceo: "a founder-led",
+      family_ceo: "a family-controlled",
+      founder_family_control_non_ceo: "a family/founder-controlled",
+      family_majority_owned: "a family majority-owned",
+    }[data.ownership_category];
+    const ownershipRationale = {
+      founder_ceo: "Founder-led companies manage succession on the founder's own timeline — market pressure, TSR, and analyst opinion do not drive departure decisions.",
+      family_ceo: "Family-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance.",
+      founder_family_control_non_ceo: "Family/founder-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance.",
+      family_majority_owned: "Companies with a family majority or controlling stake manage succession at the family's discretion — the controlling family determines CEO tenure and replacement, independent of market pressure, TSR, or minority shareholder opinion.",
+    }[data.ownership_category];
     return {
       prediction: "low_likelihood",
       confidence: "high",
-      analytical_rationale: `${rationaleCEO} leads a ${OWN_LABEL[data.ownership_category]||"family/founder-controlled"} company. Family and founder-controlled businesses manage succession internally — departure decisions are not driven by external pressure, analyst opinion, or TSR performance. Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
+      analytical_rationale: `${rationaleCEO} leads ${ownershipDesc} company. ${ownershipRationale} Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
+    };
+  }
+
+  // ── Rule 1b: PE-owned — structurally low ─────────────────────────────────
+  // The PE sponsor controls succession decisions entirely. CEO changes are made
+  // at the sponsor's discretion — not in response to public market pressure,
+  // shareholder activism, or TSR vs listed peers.
+  else if (data.ownership_category === "private_equity_owned" && !solidProofOfChange) {
+    return {
+      prediction: "low_likelihood",
+      confidence: "high",
+      analytical_rationale: `${rationaleCEO} leads a private equity-owned company. PE-owned companies have succession controlled entirely by the sponsor — the PE firm appoints and removes the CEO at its own discretion, independent of public market pressure, TSR, or shareholder activism. Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
+    };
+  }
+
+  // ── Rule 1c: Government / State-owned — structurally low ─────────────────
+  // CEO succession is a government or political appointment decision. Market
+  // signals, TSR, and analyst opinion carry no weight in these organisations.
+  else if (["government_controlled","state_owned_enterprise"].includes(data.ownership_category) && !solidProofOfChange) {
+    const ownershipDesc = data.ownership_category === "state_owned_enterprise" ? "a state-owned enterprise" : "a government-controlled company";
+    const ownershipRationale = data.ownership_category === "state_owned_enterprise"
+      ? "State-owned enterprises have CEO succession determined by government mandate — market-based succession signals do not apply in the same way as at listed companies."
+      : "Government-controlled companies have succession determined by government appointment — CEO changes are political decisions, not driven by shareholder pressure or TSR.";
+    return {
+      prediction: "low_likelihood",
+      confidence: "high",
+      analytical_rationale: `${rationaleCEO} leads ${ownershipDesc}. ${ownershipRationale} Unless a formal departure or named successor is publicly confirmed, succession risk remains structurally low.`
     };
   }
 
@@ -635,8 +754,16 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rule 4: Incoming CEO announced even without formal departure → Transition Underway
-  if (data.incoming_ceo_announced === "yes") {
+  // ── Compute tenure once — used by Rules 4, 5, 5b ─────────────────────────
+  const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
+  // PATCH 2: changed < 1.5 to <= 1.5 — catches the exact boundary case (e.g. 1.5yr tenure)
+  const newlyInSeat = !isNaN(tenureNum) && tenureNum <= 1.5;
+
+  // Rule 4: Incoming CEO announced — BUT only if they have NOT already started.
+  const samePersonAlready = data.incoming_ceo_name &&
+    data.ceo_name &&
+    data.incoming_ceo_name.trim().toLowerCase() === data.ceo_name.trim().toLowerCase();
+  if (data.incoming_ceo_announced === "yes" && !newlyInSeat && !samePersonAlready) {
     const succ = data.incoming_ceo_name && data.incoming_ceo_name !== "N/A" ? data.incoming_ceo_name : "a named successor";
     const bg   = data.incoming_ceo_background && data.incoming_ceo_background !== "N/A" ? ` (${data.incoming_ceo_background})` : "";
     return {
@@ -646,39 +773,70 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rule 5: Very short tenure → New CEO recently appointed
-  const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
+  // Rules 5 / 5b: New CEO already in seat (tenure <= 1.5yr) — transition complete.
+  if (newlyInSeat || samePersonAlready) {
+    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+      ? data._ceo_name_pre_qc : null;
+    const rationale = departedCEO
+      ? `${departedCEO} formally announced departure and the leadership transition has since completed. ${rationaleCEO} is the newly appointed CEO with ${data.ceo_tenure_years} years in the role. Succession risk is currently low — the board has resolved the transition.`
+      : `${rationaleCEO} was recently appointed as CEO with only ${data.ceo_tenure_years} years in the role. This reflects a recent leadership change at the company. Succession risk is currently low given the fresh appointment.`;
+    return { prediction: "new_ceo_appointed", confidence: "high", analytical_rationale: rationale };
+  }
 
-  if (!isNaN(tenureNum) && tenureNum < 1.0) {
+  // ── Hardcoded Rule: age >= 58 AND tenure >= 5 → high_likelihood ─────────
+  const age = parseInt(data.ceo_age) || 0;
+  const ten = tenureNum || 0;
+  if (age >= 58 && ten >= 5) {
     return {
-      prediction: "new_ceo_appointed",
+      prediction: "high_likelihood",
       confidence: "high",
-      analytical_rationale: `${rationaleCEO} was recently appointed as CEO with only ${data.ceo_tenure_years} years in the role. This reflects a recent leadership change at the company. Succession risk is currently low given the fresh appointment.`
+      analytical_rationale: `${rationaleCEO} is ${data.ceo_age} years old with ${data.ceo_tenure_years} years as CEO — both age and tenure exceed the institutional threshold (58+ years, 5+ years tenure) that statistically correlates with near-term succession. Board succession planning is likely already underway. This is a professionally managed company with no founder/family override.`
     };
   }
 
-  // ── FIX 2: Rule 5b — departure happened and new CEO is now in seat ────────
-  // Catches the case where:
-  //   - The previous CEO's departure was announced (ceo_departure_announced="yes")
-  //   - But the new CEO is already in the role (short tenure, QC corrected ceo_name)
-  //   - incoming_ceo_announced was never set to "yes" because the transition is done
-  // Without this rule the pipeline falls through to the LLM scorer which sees
-  // "departure announced" signals and rates it high_likelihood — wrong.
-  // The threshold is 1.5yr to absorb imprecise start-date calculations.
-  if (data.ceo_departure_announced === "yes" && !isNaN(tenureNum) && tenureNum < 1.5) {
-    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
-      ? data._ceo_name_pre_qc
-      : "The previous CEO";
+  // ── Rule A: Age ≥ 60 + below-peer TSR (3yr) → High Likelihood ───────────
+  const tsrBelowPeers = (s) => {
+    if (!s || ni(s)) return false;
+    const l = s.toLowerCase();
+    return l.includes("below") || l.includes("underperform") ||
+           l.includes("lagging") || l.includes("lag") ||
+           l.includes("worse") || l.includes("behind") ||
+           l.includes("trail") || l.includes("weak");
+  };
+  if (age >= 60 && ten >= 3 && tsrBelowPeers(data.tsr_vs_peers)) {
     return {
-      prediction: "new_ceo_appointed",
+      prediction: "high_likelihood",
       confidence: "high",
-      analytical_rationale: `${departedCEO} formally announced departure and a leadership transition has since completed. ${rationaleCEO} is the newly appointed CEO with ${data.ceo_tenure_years} years in the role. Succession risk is currently low — the board has resolved the transition.`
+      analytical_rationale: `${rationaleCEO} is ${data.ceo_age} years old with ${data.ceo_tenure_years} years as CEO and TSR performance below sector peers on a 3-year annualised basis (${data.tsr_vs_peers}). The combination of age and sustained underperformance relative to peers is a strong indicator of near-term board-initiated succession pressure.`
+    };
+  }
+
+  // ── Rule B: Tenure ≥ 5yr + below-peer TSR (3yr) → High Likelihood ─────────
+  if (ten >= 5 && tsrBelowPeers(data.tsr_vs_peers)) {
+    return {
+      prediction: "high_likelihood",
+      confidence: "high",
+      analytical_rationale: `${rationaleCEO} has been CEO for ${data.ceo_tenure_years} years with TSR performance below sector peers on a 3-year annualised basis (${data.tsr_vs_peers}). Sustained underperformance vs peers over a long tenure is one of the strongest predictors of board-driven CEO succession at professionally managed companies.`
+    };
+  }
+
+  // ── Rule C: Interim CEO → High Likelihood ─────────────────────────────────
+  const isInterim = (s) => {
+    if (!s) return false;
+    const l = s.toLowerCase();
+    return l.includes("interim") || l.includes("acting") || l.includes("temporary");
+  };
+  if (isInterim(data.ceo_name) || isInterim(data.mandate_signals) ||
+      isInterim(data.leadership_signals?.join(" ")) ||
+      isInterim(data.succession_plan_disclosed)) {
+    return {
+      prediction: "high_likelihood",
+      confidence: "high",
+      analytical_rationale: `${rationaleCEO} is serving as interim/acting CEO, indicating the board has not yet identified or confirmed a permanent successor. Interim appointments represent structurally elevated succession risk — a permanent CEO search is either underway or imminent.`
     };
   }
 
   // ── LLM SCORING — for all other non-obvious cases ────────────────────────
-  const age = parseInt(data.ceo_age) || 0;
-  const ten = tenureNum || 0;
 
   const raw = await callLLM(
     `You are a CEO succession risk expert at a top institutional investor. Today is ${new Date().toDateString()}.
@@ -692,10 +850,16 @@ Sector: ${data.sector}
 Ownership: ${data.ownership_category}
 
 ━━━ CEO PROFILE ━━━
-Name: ${data.ceo_name}
+Current CEO (in seat now): ${data.ceo_name}
+Departed CEO (who left / announced departure): ${rationaleCEO !== data.ceo_name ? rationaleCEO : "same as current — no transition"}
 Age: ${data.ceo_age}
 Tenure: ${data.ceo_tenure_years} years  (started: ${data.ceo_start_date})
 Founder status: ${data.founder_status||"not founder"}
+
+⚠ RATIONALE NAMING RULE — CRITICAL:
+If a departure was announced, the analytical_rationale MUST name the DEPARTED CEO (shown above), NOT the current CEO.
+The current CEO is the one now in seat. The departed CEO is the one who left or announced leaving.
+NEVER write "[Current CEO] has formally announced departure" — they did not depart, the departed CEO did.
 
 ━━━ GOVERNANCE SIGNALS ━━━
 Contract expiry: ${data.ceo_contract_expiry}
@@ -723,23 +887,33 @@ Return this JSON:
 {"prediction":"","confidence":"","analytical_rationale":"","investor_impact":"High negative|Moderate negative|Neutral|Positive"}
 
 ━━━ CLASSIFICATION RULES (apply in order, stop at first match) ━━━
-1. age >= 63 AND tenure >= 8                     → high_likelihood
+NOTE: The following are already handled by hardcoded rules before you — data
+reaching you has passed all these filters already. Apply remaining rules only.
+• age >= 58 AND tenure >= 5 (non-family/founder)
+• age >= 60 AND tenure >= 3 AND TSR below peers (non-family/founder)
+• tenure >= 5 AND TSR below peers (non-family/founder)
+• interim/acting CEO (non-family/founder)
+
+1. age >= 58 AND tenure >= 5 (non-family/founder)  → high_likelihood
+   OR age >= 60 AND tenure >= 3 AND TSR below peers → high_likelihood
+   OR tenure >= 5 AND TSR below peers               → high_likelihood
+   OR interim/acting CEO                            → high_likelihood
 2. TWO OR MORE of these signals present:
    • activist investor present with named demands
    • TSR significantly below sector peers
-   • tenure >= 8 years AND signals of board restlessness
+   • tenure >= 5 years AND signals of board restlessness
    • contract expires within 12 months with no renewal indication
-   • age >= 60 AND multiple other signals
+   • age >= 55 AND multiple other signals
    • major scandal or regulatory probe
    • COO/President appointed as clear named heir apparent
    • board recently refreshed suggesting change agenda
    • mandate signals indicating limited remaining term
                                                  → high_likelihood
 3. ONE of these signals:
-   • tenure 5–8 years with some underperformance
+   • tenure 5+ years with some underperformance
    • mild TSR underperformance vs peers
    • contract expiry in 1–2 years
-   • age 58–62 with no strong retention signals
+   • age 55–57 with no strong retention signals
    • COO appointed but not clearly heir
                                                  → medium_likelihood
 4. low_likelihood if: tenure < 5yr AND no activist AND contract recently renewed AND performance solid
@@ -755,11 +929,17 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
   r.analytical_rationale = cl(r.analytical_rationale||"", 80);
   r.investor_impact      = cl(r.investor_impact||"", 8);
 
+  // ── Name correction ───────────────────────────────────────────────────────
+  if (rationaleCEO && data.ceo_name && rationaleCEO !== data.ceo_name &&
+      r.analytical_rationale.includes(data.ceo_name)) {
+    r.analytical_rationale = r.analytical_rationale.split(data.ceo_name).join(rationaleCEO);
+  }
+
   // ── Embedded Challenge ────────────────────────────────────────────────────
   try {
     const chalRaw = await callLLM(
       `You are a devil's advocate. Challenge the prediction below — find the strongest reason it could be wrong. Return ONLY valid JSON.`,
-      `Company: ${data.company||""} | CEO: ${data.ceo_name} | Age: ${data.ceo_age} | Tenure: ${data.ceo_tenure_years}yr
+      `Company: ${data.company||""} | Current CEO: ${data.ceo_name} | Departed CEO: ${rationaleCEO !== data.ceo_name ? rationaleCEO : "same"} | Age: ${data.ceo_age} | Tenure: ${data.ceo_tenure_years}yr
 Ownership: ${data.ownership_category} | TSR vs peers: ${data.tsr_vs_peers}
 Current prediction: ${r.prediction} (${r.confidence} confidence)
 Finance view: ${finance.view} | Press view: ${press.view}
@@ -776,6 +956,10 @@ Return: {"should_revise":false,"revised_prediction":"","revised_confidence":"","
       r.confidence = cl(chal.revised_confidence || r.confidence, 2);
       r.analytical_rationale = cl(r.analytical_rationale + (chal.challenge_note ? ` [Self-revised: ${chal.challenge_note}]` : ""), 80);
       r._challenge = "revised";
+      if (rationaleCEO && data.ceo_name && rationaleCEO !== data.ceo_name &&
+          r.analytical_rationale.includes(data.ceo_name)) {
+        r.analytical_rationale = r.analytical_rationale.split(data.ceo_name).join(rationaleCEO);
+      }
     } else {
       r._challenge = "held";
     }
@@ -984,8 +1168,10 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    // ── FIX 1: expose pre-QC name in output for display/export ───────────────
-    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name) ? data._ceo_name_pre_qc : "",
+    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+      ? data._ceo_name_pre_qc
+      : "",
+    transition_complete: data._transition_complete || false,
     prediction:pred.prediction, confidence:pred.confidence, analytical_rationale:pred.analytical_rationale,
     revenue:normaliseRevenue(finance.revenue||data.revenue),
     revenue_growth:finance.revenue_growth||"",
@@ -1038,7 +1224,7 @@ async function runPipeline(company, ticker, log) {
   };
 }
 
-// ── Export to CSV ─────────────────────────────────────────────────────────────
+// ── Export to formatted XLSX (xlsx-js-style) ─────────────────────────────────
 function exportToExcel(results) {
   const PRED_LABEL_MAP = {
     new_ceo_appointed:"New CEO Appointed", transition_underway:"Transition Underway",
@@ -1046,95 +1232,436 @@ function exportToExcel(results) {
     low_likelihood:"Low Likelihood"
   };
 
-  const cols = [
-    { key:"company",              label:"Company"                        },
-    { key:"ticker",               label:"Ticker"                         },
-    { key:"sector",               label:"Sector"                         },
-    { key:"ownership_category",   label:"Ownership Type"                 },
-    { key:"ceo_name",             label:"CEO Name"                       },
-    { key:"departed_ceo_name",    label:"Departed CEO Name"              },
-    { key:"ceo_age",              label:"CEO Age"                        },
-    { key:"ceo_start_date",       label:"CEO Start Date"                 },
-    { key:"ceo_tenure_years",     label:"CEO Tenure (Years)"             },
-    { key:"founder_status",       label:"Founder Status"                 },
-    { key:"ceo_departure_announced", label:"Departure Announced"         },
-    { key:"incoming_ceo_announced",  label:"Successor Announced"         },
-    { key:"incoming_ceo_name",       label:"Incoming CEO Name"           },
-    { key:"incoming_ceo_background", label:"Incoming CEO Background"     },
-    { key:"incoming_ceo_start_date", label:"Incoming CEO Start Date"     },
-    { key:"prediction",           label:"Prediction",        fmt: v => PRED_LABEL_MAP[v]||v },
-    { key:"confidence",           label:"Confidence"                     },
-    { key:"investor_impact",      label:"Investor Impact"                },
-    { key:"analytical_rationale", label:"Board-Ready Rationale"          },
-    { key:"revenue",              label:"Revenue"                        },
-    { key:"tsr_1yr",              label:"TSR 1yr"                        },
-    { key:"tsr_3yr",              label:"TSR 3yr"                        },
-    { key:"tsr_vs_peers",         label:"TSR vs Peers"                   },
-    { key:"financial_summary",    label:"Financial Summary"              },
-    { key:"ceo_contract_expiry",  label:"Contract Expiry"                },
-    { key:"contract_renewed",     label:"Contract Renewed"               },
-    { key:"succession_plan_disclosed", label:"Succession Plan"           },
-    { key:"coo_or_president_appointed", label:"COO / President Appointed"},
-    { key:"board_refreshed_2yr",  label:"Board Refreshed (2yr)"          },
-    { key:"activist_investors",   label:"Activist Investors"             },
-    { key:"investor_activism",    label:"Activism Detail"                },
-    { key:"mandate_signals",      label:"Mandate Signals"                },
-    { key:"finance_view",         label:"Finance Agent View"             },
-    { key:"press_view",           label:"Press Agent View"               },
-    { key:"industry_view",        label:"Industry Agent View"            },
-    { key:"press_controversies",  label:"Press Controversies"            },
-    { key:"leadership_signals",   label:"Leadership Signals",  fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"financial_signals",    label:"Financial Signals",   fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"press_signals",        label:"Press Signals",       fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"industry_signals",     label:"Industry Signals",    fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"finance_concerns",     label:"Finance Concerns",    fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"press_concerns",       label:"Press Concerns",      fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"industry_concerns",    label:"Industry Concerns",   fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"qc_score",              label:"QC Completeness Score"         },
-    { key:"qc_summary",            label:"QC Summary"                    },
-    { key:"validation_ceo",        label:"CEO Name Verified"             },
-    { key:"validation_ceo_note",   label:"CEO Verification Note"         },
-    { key:"validation_tsr",        label:"TSR Verified"                  },
-    { key:"validation_tsr_note",   label:"TSR Note"                      },
-    { key:"validation_revenue",    label:"Revenue Verified"              },
-    { key:"validation_prediction", label:"Prediction QC"                 },
-    { key:"validation_prediction_note", label:"Prediction QC Note"       },
-    { key:"validation_company",    label:"Company Identity Check"        },
-    { key:"validation_flags",      label:"QC Flags",  fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"validation_missing",    label:"Missing Fields", fmt: v => Array.isArray(v)?v.join(", "):v },
-    { key:"challenge_points",      label:"Challenge Points",    fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"overriding_factors",    label:"Overriding Factors",  fmt: v => Array.isArray(v)?v.join(" | "):v },
-    { key:"challenge_summary",     label:"Challenge Summary"             },
-    { key:"prediction_revised",    label:"Prediction Revised?", fmt: v => v?"Yes":"No" },
+  // ── Shared style tokens ───────────────────────────────────────────────────
+  const FONT_BASE   = { name:"Calibri", sz:9 };
+  const FONT_HDR    = { name:"Calibri", sz:10, bold:true, color:{ rgb:"FFFFFF" } };
+  const FONT_TITLE  = { name:"Calibri", sz:16, bold:true, color:{ rgb:"C00000" } };
+  const FONT_SUB    = { name:"Calibri", sz:9,  color:{ rgb:"6B7280" } };
+  const FONT_BOLD   = { ...FONT_BASE, bold:true };
+  const FONT_ITALIC = { ...FONT_BASE, italic:true, color:{ rgb:"374151" } };
+
+  const FILL_RED    = { patternType:"solid", fgColor:{ rgb:"C00000" } };  // Bain red header
+  const FILL_DARK   = { patternType:"solid", fgColor:{ rgb:"1F2937" } };  // dark section header
+  const FILL_WHITE  = { patternType:"solid", fgColor:{ rgb:"FFFFFF" } };
+  const FILL_STRIPE = { patternType:"solid", fgColor:{ rgb:"F8FAFC" } };  // subtle stripe
+  const FILL_PRED   = {
+    "New CEO Appointed":   { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
+    "Transition Underway": { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
+    "High Likelihood":     { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
+    "Medium Likelihood":   { patternType:"solid", fgColor:{ rgb:"FEF9C3" } },
+    "Low Likelihood":      { patternType:"solid", fgColor:{ rgb:"DCFCE7" } },
+  };
+  const FONT_PRED   = {
+    "New CEO Appointed":   { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
+    "Transition Underway": { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
+    "High Likelihood":     { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
+    "Medium Likelihood":   { ...FONT_BASE, bold:true, color:{ rgb:"92400E" } },
+    "Low Likelihood":      { ...FONT_BASE, bold:true, color:{ rgb:"166534" } },
+  };
+  const FILL_CONF   = {
+    "high":   { patternType:"solid", fgColor:{ rgb:"DCFCE7" } },
+    "medium": { patternType:"solid", fgColor:{ rgb:"FEF9C3" } },
+    "low":    { patternType:"solid", fgColor:{ rgb:"F3F4F6" } },
+  };
+  const FONT_CONF   = {
+    "high":   { ...FONT_BASE, bold:true, color:{ rgb:"166534" } },
+    "medium": { ...FONT_BASE, bold:true, color:{ rgb:"92400E" } },
+    "low":    { ...FONT_BASE, bold:true, color:{ rgb:"6B7280" } },
+  };
+
+  const BDR = (color="D1D5DB") => ({
+    top:    { style:"thin", color:{ rgb:color } },
+    bottom: { style:"thin", color:{ rgb:color } },
+    left:   { style:"thin", color:{ rgb:color } },
+    right:  { style:"thin", color:{ rgb:color } },
+  });
+  const BDR_THICK = {
+    top:    { style:"medium", color:{ rgb:"C00000" } },
+    bottom: { style:"medium", color:{ rgb:"C00000" } },
+    left:   { style:"medium", color:{ rgb:"C00000" } },
+    right:  { style:"medium", color:{ rgb:"C00000" } },
+  };
+
+  const cell = (v, s) => ({ v: v ?? "", t:"s", s });
+
+  // ── Column definitions ────────────────────────────────────────────────────
+  const SECTIONS = [
+    {
+      title: "COMPANY & CEO PROFILE",
+      color: "1E3A5F",
+      cols: [
+        { key:"company",                 label:"Company",               w:24 },
+        { key:"ticker",                  label:"Ticker",                w:10 },
+        { key:"sector",                  label:"Sector",                w:18 },
+        { key:"ownership_category",      label:"Ownership Type",        w:22 },
+        { key:"ceo_name",                label:"CEO Name",              w:22 },
+        { key:"departed_ceo_name",       label:"Departed CEO",          w:22 },
+        { key:"ceo_age",                 label:"Age",                   w:8  },
+        { key:"ceo_start_date",          label:"Start Date",            w:14 },
+        { key:"ceo_tenure_years",        label:"Tenure (yrs)",          w:13 },
+        { key:"founder_status",          label:"Founder Status",        w:18 },
+      ]
+    },
+    {
+      title: "SUCCESSION STATUS",
+      color: "7F1D1D",
+      cols: [
+        { key:"prediction",              label:"Prediction",            w:24, fmt: v => PRED_LABEL_MAP[v]||v },
+        { key:"confidence",              label:"Confidence",            w:12 },
+        { key:"investor_impact",         label:"Investor Impact",       w:20 },
+        { key:"ceo_departure_announced", label:"Departure Announced",   w:18 },
+        { key:"incoming_ceo_announced",  label:"Successor Announced",   w:18 },
+        { key:"incoming_ceo_name",       label:"Incoming CEO",          w:22 },
+        { key:"incoming_ceo_background", label:"Incoming Background",   w:32 },
+        { key:"incoming_ceo_start_date", label:"Incoming Start Date",   w:20 },
+        { key:"analytical_rationale",    label:"Board-Ready Rationale", w:65 },
+      ]
+    },
+    {
+      title: "FINANCIALS & PERFORMANCE",
+      color: "14532D",
+      cols: [
+        { key:"revenue",                 label:"Revenue",               w:14 },
+        { key:"tsr_1yr",                 label:"TSR 1yr",               w:12 },
+        { key:"tsr_3yr",                 label:"TSR 3yr",               w:12 },
+        { key:"tsr_vs_peers",            label:"TSR vs Peers",          w:28 },
+        { key:"financial_summary",       label:"Financial Summary",     w:55 },
+        { key:"operating_margin",        label:"Operating Margin",      w:20 },
+        { key:"analyst_view",            label:"Analyst View",          w:22 },
+        { key:"finance_view",            label:"Finance Agent View",    w:20 },
+      ]
+    },
+    {
+      title: "GOVERNANCE",
+      color: "1E3A5F",
+      cols: [
+        { key:"ceo_contract_expiry",          label:"Contract Expiry",        w:18 },
+        { key:"contract_renewed",             label:"Contract Renewed",       w:18 },
+        { key:"succession_plan_disclosed",    label:"Succession Plan",        w:28 },
+        { key:"coo_or_president_appointed",   label:"COO / President",        w:28 },
+        { key:"board_refreshed_2yr",          label:"Board Refreshed (2yr)",  w:22 },
+        { key:"mandate_signals",              label:"Mandate Signals",        w:35 },
+      ]
+    },
+    {
+      title: "ACTIVISM & PRESS",
+      color: "78350F",
+      cols: [
+        { key:"activist_investors",      label:"Activist Investors",    w:28 },
+        { key:"investor_activism",       label:"Activism Detail",       w:45 },
+        { key:"press_controversies",     label:"Press Controversies",   w:45 },
+        { key:"press_view",              label:"Press Agent View",      w:20 },
+        { key:"press_signals",           label:"Press Signals",         w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"press_concerns",          label:"Press Concerns",        w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+      ]
+    },
+    {
+      title: "SIGNALS & INTELLIGENCE",
+      color: "312E81",
+      cols: [
+        { key:"leadership_signals",      label:"Leadership Signals",    w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"financial_signals",       label:"Financial Signals",     w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"industry_signals",        label:"Industry Signals",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"industry_view",           label:"Industry Agent View",   w:20 },
+        { key:"finance_concerns",        label:"Finance Concerns",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"industry_concerns",       label:"Industry Concerns",     w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+      ]
+    },
+    {
+      title: "QC & VALIDATION",
+      color: "374151",
+      cols: [
+        { key:"qc_score",                label:"QC Score",              w:12 },
+        { key:"qc_summary",              label:"QC Summary",            w:45 },
+        { key:"validation_ceo",          label:"CEO Verified",          w:16 },
+        { key:"validation_ceo_note",     label:"CEO Verify Note",       w:35 },
+        { key:"validation_tsr",          label:"TSR Verified",          w:14 },
+        { key:"validation_revenue",      label:"Revenue Verified",      w:16 },
+        { key:"validation_prediction",   label:"Prediction QC",         w:22 },
+        { key:"validation_prediction_note", label:"Prediction QC Note", w:35 },
+        { key:"validation_company",      label:"Company Identity",      w:22 },
+        { key:"validation_flags",        label:"QC Flags",              w:35, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"validation_missing",      label:"Missing Fields",        w:35, fmt: v => Array.isArray(v)?v.join(", "):v },
+        { key:"challenge_summary",       label:"Challenge Summary",     w:45 },
+        { key:"prediction_revised",      label:"Prediction Revised?",   w:16, fmt: v => v?"Yes":"No" },
+        { key:"challenge_points",        label:"Challenge Points",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+        { key:"overriding_factors",      label:"Overriding Factors",    w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
+      ]
+    },
   ];
+
+  // Flatten all cols in order
+  const allCols = SECTIONS.flatMap(s => s.cols);
 
   const flatten = v => {
     if (Array.isArray(v)) return v.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" | ");
     if (typeof v === "object" && v !== null) return JSON.stringify(v);
     return String(v ?? "");
   };
-  const escape = v => {
-    const s = flatten(v).replace(/"/g, '""');
-    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
+  const getVal = (r, c) => flatten(c.fmt ? c.fmt(r[c.key] ?? "") : (r[c.key] ?? ""));
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SHEET 1 — Main Data
+  // Row 0: title row (merged)
+  // Row 1: section header row
+  // Row 2: column header row
+  // Row 3+: data rows
+  // ─────────────────────────────────────────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+  const ws = {};
+  const numCols = allCols.length;
+  const R_TITLE  = 0;
+  const R_SECT   = 1;
+  const R_HDR    = 2;
+  const R_DATA   = 3;
+  const numDataRows = results.length;
+
+  // ── Title row ────────────────────────────────────────────────────────────
+  ws[XLSX.utils.encode_cell({r:R_TITLE, c:0})] = {
+    v: `CEO Succession Risk Analysis   ·   ${results.length} Companies   ·   Generated ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`,
+    t:"s",
+    s:{
+      font: FONT_TITLE,
+      fill: { patternType:"solid", fgColor:{ rgb:"0F172A" } },
+      alignment:{ vertical:"center", horizontal:"left", indent:1 },
+    }
+  };
+  // Fill rest of title row
+  for(let c=1;c<numCols;c++){
+    ws[XLSX.utils.encode_cell({r:R_TITLE,c})] = {v:"",t:"s",s:{fill:{patternType:"solid",fgColor:{rgb:"0F172A"}}}};
+  }
+
+  // ── Section header row ────────────────────────────────────────────────────
+  let colOffset = 0;
+  for(const sec of SECTIONS){
+    for(let i=0;i<sec.cols.length;i++){
+      const c = colOffset + i;
+      ws[XLSX.utils.encode_cell({r:R_SECT, c})] = {
+        v: i === 0 ? sec.title : "",
+        t:"s",
+        s:{
+          font:{ name:"Calibri", sz:8, bold:true, color:{ rgb:"FFFFFF" } },
+          fill:{ patternType:"solid", fgColor:{ rgb:sec.color } },
+          alignment:{ vertical:"center", horizontal:"left", indent:1 },
+          border: BDR("FFFFFF"),
+        }
+      };
+    }
+    colOffset += sec.cols.length;
+  }
+
+  // ── Column header row ─────────────────────────────────────────────────────
+  allCols.forEach((col, c) => {
+    ws[XLSX.utils.encode_cell({r:R_HDR, c})] = {
+      v: col.label,
+      t:"s",
+      s:{
+        font: FONT_HDR,
+        fill: FILL_RED,
+        alignment:{ vertical:"center", horizontal:"center", wrapText:true },
+        border: BDR("B91C1C"),
+      }
+    };
+  });
+
+  // ── Data rows ─────────────────────────────────────────────────────────────
+  const predColIdx = allCols.findIndex(c => c.key === "prediction");
+  const confColIdx = allCols.findIndex(c => c.key === "confidence");
+  const ratColIdx  = allCols.findIndex(c => c.key === "analytical_rationale");
+  const compColIdx = allCols.findIndex(c => c.key === "company");
+  const ceoColIdx  = allCols.findIndex(c => c.key === "ceo_name");
+  const tenColIdx  = allCols.findIndex(c => c.key === "ceo_tenure_years");
+
+  results.forEach((row, ri) => {
+    const R = R_DATA + ri;
+    const isStripe = ri % 2 === 1;
+
+    allCols.forEach((col, c) => {
+      const v = getVal(row, col);
+      const isEven = ri % 2 === 0;
+
+      let fill = isEven ? FILL_WHITE : FILL_STRIPE;
+      let font = { ...FONT_BASE };
+      let alignment = { vertical:"top", horizontal:"left", wrapText:true };
+
+      // Prediction cell
+      if(c === predColIdx && FILL_PRED[v]){
+        fill = FILL_PRED[v];
+        font = FONT_PRED[v] || FONT_BOLD;
+        alignment = { ...alignment, horizontal:"center" };
+      }
+      // Confidence cell
+      else if(c === confColIdx){
+        const conf = v.toLowerCase();
+        fill = FILL_CONF[conf] || fill;
+        font = FONT_CONF[conf] || FONT_BOLD;
+        alignment = { ...alignment, horizontal:"center" };
+      }
+      // Company cell — bold
+      else if(c === compColIdx){
+        font = FONT_BOLD;
+      }
+      // CEO name cell — bold
+      else if(c === ceoColIdx){
+        font = { ...FONT_BASE, bold:true, color:{ rgb:"1E3A5F" } };
+      }
+      // Tenure cell — center
+      else if(c === tenColIdx){
+        alignment = { ...alignment, horizontal:"center" };
+      }
+      // Rationale cell — italic
+      else if(c === ratColIdx){
+        font = FONT_ITALIC;
+      }
+
+      ws[XLSX.utils.encode_cell({r:R, c})] = {
+        v, t:"s",
+        s:{ font, fill, alignment, border: BDR() }
+      };
+    });
+  });
+
+  // ── Sheet dimensions ──────────────────────────────────────────────────────
+  ws["!ref"] = XLSX.utils.encode_range({
+    s:{ r:0, c:0 },
+    e:{ r:R_DATA + numDataRows - 1, c:numCols - 1 }
+  });
+
+  // Column widths
+  ws["!cols"] = allCols.map(c => ({ wch: c.w || 20 }));
+
+  // Row heights
+  ws["!rows"] = [
+    { hpt:32 },  // title
+    { hpt:18 },  // section headers
+    { hpt:36 },  // column headers
+    ...results.map(() => ({ hpt:72 }))  // data rows — tall for wrapped text
+  ];
+
+  // Freeze: keep title + section + header rows + first 2 data cols visible
+  ws["!freeze"] = { xSplit:2, ySplit:3, topLeftCell:"C4", activePane:"bottomRight" };
+
+  // Auto-filter on column header row
+  ws["!autofilter"] = {
+    ref: XLSX.utils.encode_range({ s:{ r:R_HDR, c:0 }, e:{ r:R_HDR, c:numCols-1 } })
   };
 
-  const header = cols.map(c => escape(c.label)).join(",");
-  const rows = results.map(r =>
-    cols.map(c => {
-      const raw = r[c.key] ?? "";
-      const val = c.fmt ? c.fmt(raw) : raw;
-      return escape(val);
-    }).join(",")
-  );
+  // Merge title row across all columns
+  ws["!merges"] = [
+    { s:{ r:R_TITLE, c:0 }, e:{ r:R_TITLE, c:numCols-1 } },
+    // Merge each section header across its columns
+    ...(() => {
+      const merges = [];
+      let off = 0;
+      for(const sec of SECTIONS){
+        if(sec.cols.length > 1){
+          merges.push({ s:{ r:R_SECT, c:off }, e:{ r:R_SECT, c:off+sec.cols.length-1 } });
+        }
+        off += sec.cols.length;
+      }
+      return merges;
+    })(),
+  ];
 
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  XLSX.utils.book_append_sheet(wb, ws, "CEO Succession Analysis");
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SHEET 2 — Executive Summary
+  // ─────────────────────────────────────────────────────────────────────────
+  const ws2 = {};
+
+  const predOrder = ["New CEO Appointed","Transition Underway","High Likelihood","Medium Likelihood","Low Likelihood"];
+  const predCounts = results.reduce((acc, r) => {
+    const label = PRED_LABEL_MAP[r.prediction] || r.prediction || "Unknown";
+    acc[label] = (acc[label] || 0) + 1;
+    return acc;
+  }, {});
+  const highCount = (predCounts["New CEO Appointed"]||0) + (predCounts["Transition Underway"]||0) + (predCounts["High Likelihood"]||0);
+
+  // Helper to set a cell in ws2
+  const s2 = (r, c, v, s) => { ws2[XLSX.utils.encode_cell({r,c})] = { v:v??"", t:"s", s }; };
+
+  // Title
+  s2(0,0, "CEO Succession Risk Analysis", { font:FONT_TITLE, fill:{patternType:"solid",fgColor:{rgb:"0F172A"}}, alignment:{vertical:"center",horizontal:"left",indent:1} });
+  for(let c=1;c<7;c++) s2(0,c,"",{ fill:{patternType:"solid",fgColor:{rgb:"0F172A"}} });
+
+  s2(1,0, `Generated: ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}`, { font:FONT_SUB, fill:FILL_WHITE, alignment:{horizontal:"left",indent:1} });
+  for(let c=1;c<7;c++) s2(1,c,"",{ fill:FILL_WHITE });
+
+  // KPI boxes row
+  const kpis = [
+    { label:"Total Companies", value:String(results.length),              fill:"1E3A5F", fontC:"FFFFFF" },
+    { label:"High Risk+",      value:String(highCount),                   fill:"991B1B", fontC:"FFFFFF" },
+    { label:"Medium Risk",     value:String(predCounts["Medium Likelihood"]||0), fill:"92400E", fontC:"FFFFFF" },
+    { label:"Low Risk",        value:String(predCounts["Low Likelihood"]||0),    fill:"166534", fontC:"FFFFFF" },
+    { label:"High Risk %",     value:`${results.length ? Math.round((highCount/results.length)*100) : 0}%`, fill:"7F1D1D", fontC:"FFFFFF" },
+  ];
+
+  kpis.forEach((kpi, c) => {
+    s2(3, c, kpi.label, { font:{ name:"Calibri", sz:8, bold:true, color:{rgb:"FFFFFF"} }, fill:{patternType:"solid",fgColor:{rgb:kpi.fill}}, alignment:{horizontal:"center",vertical:"bottom"} });
+    s2(4, c, kpi.value, { font:{ name:"Calibri", sz:22, bold:true, color:{rgb:kpi.fontC} }, fill:{patternType:"solid",fgColor:{rgb:kpi.fill}}, alignment:{horizontal:"center",vertical:"center"} });
+    s2(5, c, "",         { fill:{patternType:"solid",fgColor:{rgb:kpi.fill}} });
+  });
+
+  // Prediction breakdown header
+  s2(7,0,"Prediction", { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
+  s2(7,1,"Count",      { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
+  s2(7,2,"% of Total", { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
+
+  predOrder.forEach((label, i) => {
+    const count = predCounts[label] || 0;
+    const pct   = results.length ? Math.round((count/results.length)*100) : 0;
+    const fill  = FILL_PRED[label] || FILL_WHITE;
+    const font  = FONT_PRED[label] || FONT_BASE;
+    s2(8+i, 0, label,        { font, fill, alignment:{horizontal:"left",indent:1},  border:BDR() });
+    s2(8+i, 1, String(count), { font:FONT_BOLD, fill, alignment:{horizontal:"center"}, border:BDR() });
+    s2(8+i, 2, `${pct}%`,    { font:FONT_BOLD, fill, alignment:{horizontal:"center"}, border:BDR() });
+  });
+
+  // Quick-reference table
+  const qrStart = 15;
+  const qrHeaders = ["Company","CEO","Tenure","Prediction","Confidence","Revenue","TSR 1yr","Ownership","Sector"];
+  qrHeaders.forEach((h,c) => {
+    s2(qrStart,c,h,{ font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center",wrapText:true}, border:BDR() });
+  });
+  results.forEach((r,i) => {
+    const isE = i%2===0;
+    const predLabel = PRED_LABEL_MAP[r.prediction]||r.prediction||"";
+    const rowFill   = isE ? FILL_WHITE : FILL_STRIPE;
+    const predFill  = FILL_PRED[predLabel] || rowFill;
+    const predFont  = FONT_PRED[predLabel] || FONT_BASE;
+    const confKey   = (r.confidence||"").toLowerCase();
+
+    s2(qrStart+1+i,0, r.company||"",                 { font:FONT_BOLD, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
+    s2(qrStart+1+i,1, r.ceo_name||"",                { font:{...FONT_BASE,color:{rgb:"1E3A5F"}}, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
+    s2(qrStart+1+i,2, r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"", { font:FONT_BASE, fill:rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
+    s2(qrStart+1+i,3, predLabel,                     { font:predFont, fill:predFill, alignment:{horizontal:"center",vertical:"top",wrapText:true}, border:BDR() });
+    s2(qrStart+1+i,4, r.confidence||"",              { font:FONT_CONF[confKey]||FONT_BASE, fill:FILL_CONF[confKey]||rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
+    s2(qrStart+1+i,5, r.revenue||"",                 { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top"}, border:BDR() });
+    s2(qrStart+1+i,6, r.tsr_1yr||"",                 { font:FONT_BASE, fill:rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
+    s2(qrStart+1+i,7, OWN_LABEL[r.ownership_category]||r.ownership_category||"", { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
+    s2(qrStart+1+i,8, r.sector||"",                  { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
+  });
+
+  ws2["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:qrStart+results.length, c:8} });
+  ws2["!cols"] = [{ wch:26 },{ wch:22 },{ wch:12 },{ wch:22 },{ wch:12 },{ wch:14 },{ wch:12 },{ wch:20 },{ wch:18 }];
+  ws2["!rows"] = [
+    { hpt:34 },{ hpt:16 },{ hpt:8 },
+    { hpt:18 },{ hpt:40 },{ hpt:8 },{ hpt:8 },
+    { hpt:8 },
+    { hpt:20 },...predOrder.map(()=>({ hpt:20 })),
+    ...Array(6).fill({ hpt:8 }),
+    { hpt:28 },...results.map(()=>({ hpt:36 }))
+  ];
+  ws2["!merges"] = [
+    { s:{r:0,c:0}, e:{r:0,c:8} },
+    { s:{r:1,c:0}, e:{r:1,c:8} },
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+
+  // ── Write file ────────────────────────────────────────────────────────────
+  XLSX.writeFile(wb, `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 // ── UI Components ─────────────────────────────────────────────────────────────
@@ -1318,7 +1845,7 @@ function Detail({r}){
             {r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"&&<span style={{color:C.muted}}> · Starts: {r.incoming_ceo_start_date}</span>}
           </div>
         )}
-        {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&!r.departed_ceo_name&&(
+        {r.ceo_departure_announced==="yes"&&r.incoming_ceo_announced!=="yes"&&!r.departed_ceo_name&&!r.transition_complete&&(
           <div style={{marginBottom:10,background:C.redBg,border:"1px solid #FECACA",borderRadius:5,padding:"6px 12px",fontSize:11,color:C.redD}}>
             ⚠ CEO departure announced — successor not yet named
           </div>
@@ -1366,18 +1893,26 @@ function Detail({r}){
               <KV label="COO / Heir Apparent" val={!ni(r.coo_or_president_appointed)?r.coo_or_president_appointed:""}/>
             </div>
 
-            {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&(
+            {/* Show transition alert only for PENDING transitions — not completed ones */}
+            {(r.ceo_departure_announced==="yes"||r.incoming_ceo_announced==="yes")&&!r.transition_complete&&(
               <div style={{background:C.redBg,border:`1px solid #FECACA`,borderRadius:7,padding:"12px 15px",marginBottom:10}}>
                 <SH>CEO Transition Alert</SH>
                 {r.ceo_departure_announced==="yes"&&(
                   <div style={{fontSize:13,color:C.redD,marginBottom:4}}>
-                    ⚠ Departure announced: <strong>{r.departed_ceo_name || r.ceo_name}</strong> is leaving.
+                    ⚠ Departure announced: <strong>{r.departed_ceo_name||r.ceo_name}</strong> is leaving.
                   </div>
                 )}
                 {r.incoming_ceo_announced==="yes"&&r.incoming_ceo_name&&r.incoming_ceo_name!=="N/A"
                   ?<div style={{fontSize:13,color:C.redD}}>✓ Successor named: <strong>{r.incoming_ceo_name}</strong>{r.incoming_ceo_background&&r.incoming_ceo_background!=="N/A"?` — ${r.incoming_ceo_background}`:""}{r.incoming_ceo_start_date&&r.incoming_ceo_start_date!=="N/A"?` · Starts: ${r.incoming_ceo_start_date}`:""}</div>
                   :r.incoming_ceo_announced==="yes"&&<div style={{fontSize:13,color:C.redD}}>Successor not yet publicly named.</div>
                 }
+              </div>
+            )}
+            {/* Completed transition banner — shows who departed and who arrived */}
+            {r.transition_complete&&r.departed_ceo_name&&(
+              <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:7,padding:"12px 15px",marginBottom:10}}>
+                <SH>CEO Transition Complete</SH>
+                <div style={{fontSize:13,color:C.ok}}>✓ <strong>{r.departed_ceo_name}</strong> departed · <strong>{r.ceo_name}</strong> appointed as new CEO</div>
               </div>
             )}
 
@@ -1713,7 +2248,23 @@ export default function App(){
   const parseTxt=()=>txt.split("\n").map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(",");return{company:p[0]?.trim(),ticker:p[1]?.trim()||""};}).filter(c=>c.company).slice(0,20);
 
   const run=async()=>{
-    setErr("");setResults([]);setLogs([]);setSel(null);
+    // ── Hard reset — wipe all state before starting a new run ────────────────
+    // This clears React state, JS heap variables, and browser request cache
+    // so every run starts completely from scratch with no residual data.
+    setErr("");
+    setResults([]);
+    setLogs([]);
+    setSel(null);
+    setProg({d:0,t:0});
+
+    // Force browser to discard any cached fetch responses for this session
+    if (window.caches) {
+      try {
+        const keys = await window.caches.keys();
+        await Promise.all(keys.map(k => window.caches.delete(k)));
+      } catch {}
+    }
+
     const cos=iTab==="manual"?parseTxt():fileCos;
     if(!cos.length){setErr("Enter at least one company.");return;}
     setRunning(true);setShowIn(false);setProg({d:0,t:cos.length});
@@ -1784,7 +2335,7 @@ export default function App(){
             )}
             <button onClick={()=>setShowIn(x=>!x)} style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",borderRadius:5,padding:"5px 12px",fontSize:11,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"}}>{showIn?"Hide Input":"New Analysis"}</button>
             {results.length>0&&!running&&(
-              <button onClick={()=>exportToExcel(results)} style={{background:"#fff",border:"none",color:C.red,borderRadius:5,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>↓ Export</button>
+              <button onClick={()=>exportToExcel(results)} style={{background:"#fff",border:"none",color:C.red,borderRadius:5,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>↓ Export Excel</button>
             )}
           </div>
         </div>
