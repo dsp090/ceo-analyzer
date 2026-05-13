@@ -2,7 +2,7 @@
 // PATCH 1: x-portkey-cache-force-refresh header added to callLLM
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
 import { useState, useRef, useEffect } from "react";
-import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.mjs";
 
 // ── Global styles ─────────────────────────────────────────────────────────────
 const injectGlobalStyle = () => {
@@ -1268,7 +1268,7 @@ async function runPipeline(company, ticker, log) {
   };
 }
 
-// ── Export to formatted XLSX (xlsx-js-style) ─────────────────────────────────
+// ── Export to XLSX (SheetJS compatible) ──────────────────────────────────────
 function exportToExcel(results) {
   const PRED_LABEL_MAP = {
     new_ceo_appointed:"New CEO Appointed", transition_underway:"Transition Underway",
@@ -1276,435 +1276,182 @@ function exportToExcel(results) {
     low_likelihood:"Low Likelihood"
   };
 
-  // ── Shared style tokens ───────────────────────────────────────────────────
-  const FONT_BASE   = { name:"Calibri", sz:9 };
-  const FONT_HDR    = { name:"Calibri", sz:10, bold:true, color:{ rgb:"FFFFFF" } };
-  const FONT_TITLE  = { name:"Calibri", sz:16, bold:true, color:{ rgb:"C00000" } };
-  const FONT_SUB    = { name:"Calibri", sz:9,  color:{ rgb:"6B7280" } };
-  const FONT_BOLD   = { ...FONT_BASE, bold:true };
-  const FONT_ITALIC = { ...FONT_BASE, italic:true, color:{ rgb:"374151" } };
-
-  const FILL_RED    = { patternType:"solid", fgColor:{ rgb:"C00000" } };  // Bain red header
-  const FILL_DARK   = { patternType:"solid", fgColor:{ rgb:"1F2937" } };  // dark section header
-  const FILL_WHITE  = { patternType:"solid", fgColor:{ rgb:"FFFFFF" } };
-  const FILL_STRIPE = { patternType:"solid", fgColor:{ rgb:"F8FAFC" } };  // subtle stripe
-  const FILL_PRED   = {
-    "New CEO Appointed":   { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
-    "Transition Underway": { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
-    "High Likelihood":     { patternType:"solid", fgColor:{ rgb:"FEE2E2" } },
-    "Medium Likelihood":   { patternType:"solid", fgColor:{ rgb:"FEF9C3" } },
-    "Low Likelihood":      { patternType:"solid", fgColor:{ rgb:"DCFCE7" } },
-  };
-  const FONT_PRED   = {
-    "New CEO Appointed":   { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
-    "Transition Underway": { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
-    "High Likelihood":     { ...FONT_BASE, bold:true, color:{ rgb:"991B1B" } },
-    "Medium Likelihood":   { ...FONT_BASE, bold:true, color:{ rgb:"92400E" } },
-    "Low Likelihood":      { ...FONT_BASE, bold:true, color:{ rgb:"166534" } },
-  };
-  const FILL_CONF   = {
-    "high":   { patternType:"solid", fgColor:{ rgb:"DCFCE7" } },
-    "medium": { patternType:"solid", fgColor:{ rgb:"FEF9C3" } },
-    "low":    { patternType:"solid", fgColor:{ rgb:"F3F4F6" } },
-  };
-  const FONT_CONF   = {
-    "high":   { ...FONT_BASE, bold:true, color:{ rgb:"166534" } },
-    "medium": { ...FONT_BASE, bold:true, color:{ rgb:"92400E" } },
-    "low":    { ...FONT_BASE, bold:true, color:{ rgb:"6B7280" } },
+  const flatten = v => {
+    if (Array.isArray(v)) return v.map(i => typeof i==="object"?JSON.stringify(i):String(i)).join(" | ");
+    if (typeof v==="object"&&v!==null) return JSON.stringify(v);
+    return String(v??"");
   };
 
-  const BDR = (color="D1D5DB") => ({
-    top:    { style:"thin", color:{ rgb:color } },
-    bottom: { style:"thin", color:{ rgb:color } },
-    left:   { style:"thin", color:{ rgb:color } },
-    right:  { style:"thin", color:{ rgb:color } },
-  });
-  const BDR_THICK = {
-    top:    { style:"medium", color:{ rgb:"C00000" } },
-    bottom: { style:"medium", color:{ rgb:"C00000" } },
-    left:   { style:"medium", color:{ rgb:"C00000" } },
-    right:  { style:"medium", color:{ rgb:"C00000" } },
-  };
-
-  const cell = (v, s) => ({ v: v ?? "", t:"s", s });
-
-  // ── Column definitions ────────────────────────────────────────────────────
+  // ── Column groups ─────────────────────────────────────────────────────────
   const SECTIONS = [
-    {
-      title: "COMPANY & CEO PROFILE",
-      color: "1E3A5F",
-      cols: [
-        { key:"company",                 label:"Company",               w:24 },
-        { key:"ticker",                  label:"Ticker",                w:10 },
-        { key:"sector",                  label:"Sector",                w:18 },
-        { key:"ownership_category",      label:"Ownership Type",        w:22 },
-        { key:"ceo_name",                label:"CEO Name",              w:22 },
-        { key:"departed_ceo_name",       label:"Departed CEO",          w:22 },
-        { key:"ceo_age",                 label:"Age",                   w:8  },
-        { key:"ceo_start_date",          label:"Start Date",            w:14 },
-        { key:"ceo_tenure_years",        label:"Tenure (yrs)",          w:13 },
-        { key:"founder_status",          label:"Founder Status",        w:18 },
-      ]
-    },
-    {
-      title: "SUCCESSION STATUS",
-      color: "7F1D1D",
-      cols: [
-        { key:"prediction",              label:"Prediction",            w:24, fmt: v => PRED_LABEL_MAP[v]||v },
-        { key:"confidence",              label:"Confidence",            w:12 },
-        { key:"investor_impact",         label:"Investor Impact",       w:20 },
-        { key:"ceo_departure_announced", label:"Departure Announced",   w:18 },
-        { key:"incoming_ceo_announced",  label:"Successor Announced",   w:18 },
-        { key:"incoming_ceo_name",       label:"Incoming CEO",          w:22 },
-        { key:"incoming_ceo_background", label:"Incoming Background",   w:32 },
-        { key:"incoming_ceo_start_date", label:"Incoming Start Date",   w:20 },
-        { key:"analytical_rationale",    label:"Board-Ready Rationale", w:65 },
-      ]
-    },
-    {
-      title: "FINANCIALS & PERFORMANCE",
-      color: "14532D",
-      cols: [
-        { key:"revenue",                 label:"Revenue",               w:14 },
-        { key:"tsr_1yr",                 label:"TSR 1yr",               w:12 },
-        { key:"tsr_3yr",                 label:"TSR 3yr",               w:12 },
-        { key:"tsr_vs_peers",            label:"TSR vs Peers",          w:28 },
-        { key:"financial_summary",       label:"Financial Summary",     w:55 },
-        { key:"operating_margin",        label:"Operating Margin",      w:20 },
-        { key:"analyst_view",            label:"Analyst View",          w:22 },
-        { key:"finance_view",            label:"Finance Agent View",    w:20 },
-      ]
-    },
-    {
-      title: "GOVERNANCE",
-      color: "1E3A5F",
-      cols: [
-        { key:"ceo_contract_expiry",          label:"Contract Expiry",        w:18 },
-        { key:"contract_renewed",             label:"Contract Renewed",       w:18 },
-        { key:"succession_plan_disclosed",    label:"Succession Plan",        w:28 },
-        { key:"coo_or_president_appointed",   label:"COO / President",        w:28 },
-        { key:"board_refreshed_2yr",          label:"Board Refreshed (2yr)",  w:22 },
-        { key:"mandate_signals",              label:"Mandate Signals",        w:35 },
-      ]
-    },
-    {
-      title: "ACTIVISM & PRESS",
-      color: "78350F",
-      cols: [
-        { key:"activist_investors",      label:"Activist Investors",    w:28 },
-        { key:"investor_activism",       label:"Activism Detail",       w:45 },
-        { key:"press_controversies",     label:"Press Controversies",   w:45 },
-        { key:"press_view",              label:"Press Agent View",      w:20 },
-        { key:"press_signals",           label:"Press Signals",         w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"press_concerns",          label:"Press Concerns",        w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-      ]
-    },
-    {
-      title: "SIGNALS & INTELLIGENCE",
-      color: "312E81",
-      cols: [
-        { key:"leadership_signals",      label:"Leadership Signals",    w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"financial_signals",       label:"Financial Signals",     w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"industry_signals",        label:"Industry Signals",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"industry_view",           label:"Industry Agent View",   w:20 },
-        { key:"finance_concerns",        label:"Finance Concerns",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"industry_concerns",       label:"Industry Concerns",     w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-      ]
-    },
-    {
-      title: "QC & VALIDATION",
-      color: "374151",
-      cols: [
-        { key:"qc_score",                label:"QC Score",              w:12 },
-        { key:"qc_summary",              label:"QC Summary",            w:45 },
-        { key:"validation_ceo",          label:"CEO Verified",          w:16 },
-        { key:"validation_ceo_note",     label:"CEO Verify Note",       w:35 },
-        { key:"validation_tsr",          label:"TSR Verified",          w:14 },
-        { key:"validation_revenue",      label:"Revenue Verified",      w:16 },
-        { key:"validation_prediction",   label:"Prediction QC",         w:22 },
-        { key:"validation_prediction_note", label:"Prediction QC Note", w:35 },
-        { key:"validation_company",      label:"Company Identity",      w:22 },
-        { key:"validation_flags",        label:"QC Flags",              w:35, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"validation_missing",      label:"Missing Fields",        w:35, fmt: v => Array.isArray(v)?v.join(", "):v },
-        { key:"challenge_summary",       label:"Challenge Summary",     w:45 },
-        { key:"prediction_revised",      label:"Prediction Revised?",   w:16, fmt: v => v?"Yes":"No" },
-        { key:"challenge_points",        label:"Challenge Points",      w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-        { key:"overriding_factors",      label:"Overriding Factors",    w:45, fmt: v => Array.isArray(v)?v.join(" | "):v },
-      ]
-    },
+    { title:"COMPANY & CEO PROFILE", cols:[
+      { key:"company",                      label:"Company",               w:24 },
+      { key:"ticker",                       label:"Ticker",                w:10 },
+      { key:"sector",                       label:"Sector",                w:18 },
+      { key:"ownership_category",           label:"Ownership Type",        w:22 },
+      { key:"ceo_name",                     label:"CEO Name",              w:22 },
+      { key:"departed_ceo_name",            label:"Departed CEO",          w:22 },
+      { key:"ceo_age",                      label:"Age",                   w:8  },
+      { key:"ceo_start_date",               label:"Start Date",            w:14 },
+      { key:"ceo_tenure_years",             label:"Tenure (yrs)",          w:13 },
+      { key:"founder_status",               label:"Founder Status",        w:18 },
+    ]},
+    { title:"SUCCESSION STATUS", cols:[
+      { key:"prediction",                   label:"Prediction",            w:24, fmt:v=>PRED_LABEL_MAP[v]||v },
+      { key:"confidence",                   label:"Confidence",            w:12 },
+      { key:"investor_impact",              label:"Investor Impact",       w:20 },
+      { key:"ceo_departure_announced",      label:"Departure Announced",   w:18 },
+      { key:"incoming_ceo_announced",       label:"Successor Announced",   w:18 },
+      { key:"incoming_ceo_name",            label:"Incoming CEO",          w:22 },
+      { key:"incoming_ceo_background",      label:"Incoming Background",   w:32 },
+      { key:"incoming_ceo_start_date",      label:"Incoming Start Date",   w:20 },
+      { key:"analytical_rationale",         label:"Board-Ready Rationale", w:65 },
+    ]},
+    { title:"FINANCIALS", cols:[
+      { key:"revenue",                      label:"Revenue",               w:14 },
+      { key:"tsr_1yr",                      label:"TSR 1yr",               w:12 },
+      { key:"tsr_3yr",                      label:"TSR 3yr",               w:12 },
+      { key:"tsr_vs_peers",                 label:"TSR vs Peers",          w:28 },
+      { key:"financial_summary",            label:"Financial Summary",     w:55 },
+      { key:"operating_margin",             label:"Operating Margin",      w:20 },
+      { key:"analyst_view",                 label:"Analyst View",          w:22 },
+      { key:"finance_view",                 label:"Finance Agent View",    w:20 },
+    ]},
+    { title:"GOVERNANCE", cols:[
+      { key:"ceo_contract_expiry",          label:"Contract Expiry",       w:18 },
+      { key:"contract_renewed",             label:"Contract Renewed",      w:18 },
+      { key:"succession_plan_disclosed",    label:"Succession Plan",       w:28 },
+      { key:"coo_or_president_appointed",   label:"COO / President",       w:28 },
+      { key:"board_refreshed_2yr",          label:"Board Refreshed (2yr)", w:22 },
+      { key:"mandate_signals",              label:"Mandate Signals",       w:35 },
+    ]},
+    { title:"ACTIVISM & PRESS", cols:[
+      { key:"activist_investors",           label:"Activist Investors",    w:28 },
+      { key:"investor_activism",            label:"Activism Detail",       w:45 },
+      { key:"press_controversies",          label:"Press Controversies",   w:45 },
+      { key:"press_view",                   label:"Press Agent View",      w:20 },
+      { key:"press_signals",                label:"Press Signals",         w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"press_concerns",               label:"Press Concerns",        w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+    ]},
+    { title:"SIGNALS", cols:[
+      { key:"leadership_signals",           label:"Leadership Signals",    w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"financial_signals",            label:"Financial Signals",     w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"industry_signals",             label:"Industry Signals",      w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"industry_view",                label:"Industry Agent View",   w:20 },
+      { key:"finance_concerns",             label:"Finance Concerns",      w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"industry_concerns",            label:"Industry Concerns",     w:45, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+    ]},
+    { title:"QC & VALIDATION", cols:[
+      { key:"qc_score",                     label:"QC Score",              w:12 },
+      { key:"qc_summary",                   label:"QC Summary",            w:45 },
+      { key:"validation_ceo",               label:"CEO Verified",          w:16 },
+      { key:"validation_ceo_note",          label:"CEO Verify Note",       w:35 },
+      { key:"validation_tsr",               label:"TSR Verified",          w:14 },
+      { key:"validation_revenue",           label:"Revenue Verified",      w:16 },
+      { key:"validation_prediction",        label:"Prediction QC",         w:22 },
+      { key:"validation_prediction_note",   label:"Prediction QC Note",    w:35 },
+      { key:"validation_company",           label:"Company Identity",      w:22 },
+      { key:"validation_flags",             label:"QC Flags",              w:35, fmt:v=>Array.isArray(v)?v.join(" | "):v },
+      { key:"validation_missing",           label:"Missing Fields",        w:35, fmt:v=>Array.isArray(v)?v.join(", "):v  },
+      { key:"challenge_summary",            label:"Challenge Summary",     w:45 },
+      { key:"prediction_revised",           label:"Prediction Revised?",   w:16, fmt:v=>v?"Yes":"No" },
+    ]},
   ];
 
-  // Flatten all cols in order
   const allCols = SECTIONS.flatMap(s => s.cols);
+  const getVal  = (r, c) => flatten(c.fmt ? c.fmt(r[c.key]??"") : (r[c.key]??""));
 
-  const flatten = v => {
-    if (Array.isArray(v)) return v.map(i => typeof i === "object" ? JSON.stringify(i) : String(i)).join(" | ");
-    if (typeof v === "object" && v !== null) return JSON.stringify(v);
-    return String(v ?? "");
-  };
-  const getVal = (r, c) => flatten(c.fmt ? c.fmt(r[c.key] ?? "") : (r[c.key] ?? ""));
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // SHEET 1 — Main Data
-  // Row 0: title row (merged)
-  // Row 1: section header row
-  // Row 2: column header row
-  // Row 3+: data rows
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Sheet 1: Full data ────────────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
-  const ws = {};
-  const numCols = allCols.length;
-  const R_TITLE  = 0;
-  const R_SECT   = 1;
-  const R_HDR    = 2;
-  const R_DATA   = 3;
-  const numDataRows = results.length;
 
-  // ── Title row ────────────────────────────────────────────────────────────
-  ws[XLSX.utils.encode_cell({r:R_TITLE, c:0})] = {
-    v: `CEO Succession Risk Analysis   ·   ${results.length} Companies   ·   Generated ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`,
-    t:"s",
-    s:{
-      font: FONT_TITLE,
-      fill: { patternType:"solid", fgColor:{ rgb:"0F172A" } },
-      alignment:{ vertical:"center", horizontal:"left", indent:1 },
-    }
-  };
-  // Fill rest of title row
-  for(let c=1;c<numCols;c++){
-    ws[XLSX.utils.encode_cell({r:R_TITLE,c})] = {v:"",t:"s",s:{fill:{patternType:"solid",fgColor:{rgb:"0F172A"}}}};
-  }
-
-  // ── Section header row ────────────────────────────────────────────────────
-  let colOffset = 0;
+  // Row 0: title
+  // Row 1: section headers
+  // Row 2: column headers
+  // Row 3+: data
+  const titleRow   = [`CEO Succession Risk Analysis  ·  ${results.length} Companies  ·  ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`];
+  const sectRow    = [];
+  const headerRow  = [];
+  let colOffset    = 0;
   for(const sec of SECTIONS){
-    for(let i=0;i<sec.cols.length;i++){
-      const c = colOffset + i;
-      ws[XLSX.utils.encode_cell({r:R_SECT, c})] = {
-        v: i === 0 ? sec.title : "",
-        t:"s",
-        s:{
-          font:{ name:"Calibri", sz:8, bold:true, color:{ rgb:"FFFFFF" } },
-          fill:{ patternType:"solid", fgColor:{ rgb:sec.color } },
-          alignment:{ vertical:"center", horizontal:"left", indent:1 },
-          border: BDR("FFFFFF"),
-        }
-      };
-    }
+    sectRow.push(sec.title);
+    for(let i=1;i<sec.cols.length;i++) sectRow.push("");
+    sec.cols.forEach(c => headerRow.push(c.label));
     colOffset += sec.cols.length;
   }
+  const dataRows = results.map(r => allCols.map(c => getVal(r,c)));
 
-  // ── Column header row ─────────────────────────────────────────────────────
-  allCols.forEach((col, c) => {
-    ws[XLSX.utils.encode_cell({r:R_HDR, c})] = {
-      v: col.label,
-      t:"s",
-      s:{
-        font: FONT_HDR,
-        fill: FILL_RED,
-        alignment:{ vertical:"center", horizontal:"center", wrapText:true },
-        border: BDR("B91C1C"),
-      }
-    };
-  });
-
-  // ── Data rows ─────────────────────────────────────────────────────────────
-  const predColIdx = allCols.findIndex(c => c.key === "prediction");
-  const confColIdx = allCols.findIndex(c => c.key === "confidence");
-  const ratColIdx  = allCols.findIndex(c => c.key === "analytical_rationale");
-  const compColIdx = allCols.findIndex(c => c.key === "company");
-  const ceoColIdx  = allCols.findIndex(c => c.key === "ceo_name");
-  const tenColIdx  = allCols.findIndex(c => c.key === "ceo_tenure_years");
-
-  results.forEach((row, ri) => {
-    const R = R_DATA + ri;
-    const isStripe = ri % 2 === 1;
-
-    allCols.forEach((col, c) => {
-      const v = getVal(row, col);
-      const isEven = ri % 2 === 0;
-
-      let fill = isEven ? FILL_WHITE : FILL_STRIPE;
-      let font = { ...FONT_BASE };
-      let alignment = { vertical:"top", horizontal:"left", wrapText:true };
-
-      // Prediction cell
-      if(c === predColIdx && FILL_PRED[v]){
-        fill = FILL_PRED[v];
-        font = FONT_PRED[v] || FONT_BOLD;
-        alignment = { ...alignment, horizontal:"center" };
-      }
-      // Confidence cell
-      else if(c === confColIdx){
-        const conf = v.toLowerCase();
-        fill = FILL_CONF[conf] || fill;
-        font = FONT_CONF[conf] || FONT_BOLD;
-        alignment = { ...alignment, horizontal:"center" };
-      }
-      // Company cell — bold
-      else if(c === compColIdx){
-        font = FONT_BOLD;
-      }
-      // CEO name cell — bold
-      else if(c === ceoColIdx){
-        font = { ...FONT_BASE, bold:true, color:{ rgb:"1E3A5F" } };
-      }
-      // Tenure cell — center
-      else if(c === tenColIdx){
-        alignment = { ...alignment, horizontal:"center" };
-      }
-      // Rationale cell — italic
-      else if(c === ratColIdx){
-        font = FONT_ITALIC;
-      }
-
-      ws[XLSX.utils.encode_cell({r:R, c})] = {
-        v, t:"s",
-        s:{ font, fill, alignment, border: BDR() }
-      };
-    });
-  });
-
-  // ── Sheet dimensions ──────────────────────────────────────────────────────
-  ws["!ref"] = XLSX.utils.encode_range({
-    s:{ r:0, c:0 },
-    e:{ r:R_DATA + numDataRows - 1, c:numCols - 1 }
-  });
+  const wsData = [titleRow, sectRow, headerRow, ...dataRows];
+  const ws     = XLSX.utils.aoa_to_sheet(wsData);
 
   // Column widths
   ws["!cols"] = allCols.map(c => ({ wch: c.w || 20 }));
 
   // Row heights
   ws["!rows"] = [
-    { hpt:32 },  // title
+    { hpt:30 },  // title
     { hpt:18 },  // section headers
     { hpt:36 },  // column headers
-    ...results.map(() => ({ hpt:72 }))  // data rows — tall for wrapped text
+    ...results.map(()=>({ hpt:72 }))
   ];
 
-  // Freeze: keep title + section + header rows + first 2 data cols visible
+  // Freeze: first 3 rows + first 2 columns
   ws["!freeze"] = { xSplit:2, ySplit:3, topLeftCell:"C4", activePane:"bottomRight" };
 
-  // Auto-filter on column header row
-  ws["!autofilter"] = {
-    ref: XLSX.utils.encode_range({ s:{ r:R_HDR, c:0 }, e:{ r:R_HDR, c:numCols-1 } })
-  };
+  // Autofilter on column header row
+  ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s:{r:2,c:0}, e:{r:2,c:allCols.length-1} }) };
 
   // Merge title row across all columns
-  ws["!merges"] = [
-    { s:{ r:R_TITLE, c:0 }, e:{ r:R_TITLE, c:numCols-1 } },
-    // Merge each section header across its columns
-    ...(() => {
-      const merges = [];
-      let off = 0;
-      for(const sec of SECTIONS){
-        if(sec.cols.length > 1){
-          merges.push({ s:{ r:R_SECT, c:off }, e:{ r:R_SECT, c:off+sec.cols.length-1 } });
-        }
-        off += sec.cols.length;
-      }
-      return merges;
-    })(),
-  ];
+  const merges = [{ s:{r:0,c:0}, e:{r:0,c:allCols.length-1} }];
+  // Merge section header cells
+  let off = 0;
+  for(const sec of SECTIONS){
+    if(sec.cols.length > 1) merges.push({ s:{r:1,c:off}, e:{r:1,c:off+sec.cols.length-1} });
+    off += sec.cols.length;
+  }
+  ws["!merges"] = merges;
 
   XLSX.utils.book_append_sheet(wb, ws, "CEO Succession Analysis");
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // SHEET 2 — Executive Summary
-  // ─────────────────────────────────────────────────────────────────────────
-  const ws2 = {};
+  // ── Sheet 2: Summary ─────────────────────────────────────────────────────
+  const predOrder  = ["New CEO Appointed","Transition Underway","High Likelihood","Medium Likelihood","Low Likelihood"];
+  const predCounts = results.reduce((acc,r)=>{
+    const label = PRED_LABEL_MAP[r.prediction]||r.prediction||"Unknown";
+    acc[label]=(acc[label]||0)+1; return acc;
+  },{});
+  const highCount  = (predCounts["New CEO Appointed"]||0)+(predCounts["Transition Underway"]||0)+(predCounts["High Likelihood"]||0);
 
-  const predOrder = ["New CEO Appointed","Transition Underway","High Likelihood","Medium Likelihood","Low Likelihood"];
-  const predCounts = results.reduce((acc, r) => {
-    const label = PRED_LABEL_MAP[r.prediction] || r.prediction || "Unknown";
-    acc[label] = (acc[label] || 0) + 1;
-    return acc;
-  }, {});
-  const highCount = (predCounts["New CEO Appointed"]||0) + (predCounts["Transition Underway"]||0) + (predCounts["High Likelihood"]||0);
-
-  // Helper to set a cell in ws2
-  const s2 = (r, c, v, s) => { ws2[XLSX.utils.encode_cell({r,c})] = { v:v??"", t:"s", s }; };
-
-  // Title
-  s2(0,0, "CEO Succession Risk Analysis", { font:FONT_TITLE, fill:{patternType:"solid",fgColor:{rgb:"0F172A"}}, alignment:{vertical:"center",horizontal:"left",indent:1} });
-  for(let c=1;c<7;c++) s2(0,c,"",{ fill:{patternType:"solid",fgColor:{rgb:"0F172A"}} });
-
-  s2(1,0, `Generated: ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}`, { font:FONT_SUB, fill:FILL_WHITE, alignment:{horizontal:"left",indent:1} });
-  for(let c=1;c<7;c++) s2(1,c,"",{ fill:FILL_WHITE });
-
-  // KPI boxes row
-  const kpis = [
-    { label:"Total Companies", value:String(results.length),              fill:"1E3A5F", fontC:"FFFFFF" },
-    { label:"High Risk+",      value:String(highCount),                   fill:"991B1B", fontC:"FFFFFF" },
-    { label:"Medium Risk",     value:String(predCounts["Medium Likelihood"]||0), fill:"92400E", fontC:"FFFFFF" },
-    { label:"Low Risk",        value:String(predCounts["Low Likelihood"]||0),    fill:"166534", fontC:"FFFFFF" },
-    { label:"High Risk %",     value:`${results.length ? Math.round((highCount/results.length)*100) : 0}%`, fill:"7F1D1D", fontC:"FFFFFF" },
+  const s2Data = [
+    [`CEO Succession Risk Analysis — Summary`],
+    [`Generated: ${new Date().toLocaleDateString("en-GB",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}`],
+    [],
+    ["Total Companies Analysed", results.length],
+    ["High Risk+ (New / Transition / High)", highCount],
+    ["High Risk %", results.length ? `${Math.round((highCount/results.length)*100)}%` : "0%"],
+    [],
+    ["Prediction Breakdown"],
+    ["Prediction","Count","% of Total"],
+    ...predOrder.map(label=>[label, predCounts[label]||0, results.length?`${Math.round(((predCounts[label]||0)/results.length)*100)}%`:"0%"]),
+    [],
+    ["Quick Reference"],
+    ["Company","CEO","Tenure","Prediction","Confidence","Revenue","TSR 1yr","Ownership","Sector"],
+    ...results.map(r=>[
+      r.company||"",
+      r.ceo_name||"",
+      r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"",
+      PRED_LABEL_MAP[r.prediction]||r.prediction||"",
+      r.confidence||"",
+      r.revenue||"",
+      r.tsr_1yr||"",
+      OWN_LABEL[r.ownership_category]||r.ownership_category||"",
+      r.sector||"",
+    ]),
   ];
 
-  kpis.forEach((kpi, c) => {
-    s2(3, c, kpi.label, { font:{ name:"Calibri", sz:8, bold:true, color:{rgb:"FFFFFF"} }, fill:{patternType:"solid",fgColor:{rgb:kpi.fill}}, alignment:{horizontal:"center",vertical:"bottom"} });
-    s2(4, c, kpi.value, { font:{ name:"Calibri", sz:22, bold:true, color:{rgb:kpi.fontC} }, fill:{patternType:"solid",fgColor:{rgb:kpi.fill}}, alignment:{horizontal:"center",vertical:"center"} });
-    s2(5, c, "",         { fill:{patternType:"solid",fgColor:{rgb:kpi.fill}} });
-  });
-
-  // Prediction breakdown header
-  s2(7,0,"Prediction", { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
-  s2(7,1,"Count",      { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
-  s2(7,2,"% of Total", { font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center"}, border:BDR() });
-
-  predOrder.forEach((label, i) => {
-    const count = predCounts[label] || 0;
-    const pct   = results.length ? Math.round((count/results.length)*100) : 0;
-    const fill  = FILL_PRED[label] || FILL_WHITE;
-    const font  = FONT_PRED[label] || FONT_BASE;
-    s2(8+i, 0, label,        { font, fill, alignment:{horizontal:"left",indent:1},  border:BDR() });
-    s2(8+i, 1, String(count), { font:FONT_BOLD, fill, alignment:{horizontal:"center"}, border:BDR() });
-    s2(8+i, 2, `${pct}%`,    { font:FONT_BOLD, fill, alignment:{horizontal:"center"}, border:BDR() });
-  });
-
-  // Quick-reference table
-  const qrStart = 15;
-  const qrHeaders = ["Company","CEO","Tenure","Prediction","Confidence","Revenue","TSR 1yr","Ownership","Sector"];
-  qrHeaders.forEach((h,c) => {
-    s2(qrStart,c,h,{ font:FONT_HDR, fill:FILL_RED, alignment:{horizontal:"center",wrapText:true}, border:BDR() });
-  });
-  results.forEach((r,i) => {
-    const isE = i%2===0;
-    const predLabel = PRED_LABEL_MAP[r.prediction]||r.prediction||"";
-    const rowFill   = isE ? FILL_WHITE : FILL_STRIPE;
-    const predFill  = FILL_PRED[predLabel] || rowFill;
-    const predFont  = FONT_PRED[predLabel] || FONT_BASE;
-    const confKey   = (r.confidence||"").toLowerCase();
-
-    s2(qrStart+1+i,0, r.company||"",                 { font:FONT_BOLD, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
-    s2(qrStart+1+i,1, r.ceo_name||"",                { font:{...FONT_BASE,color:{rgb:"1E3A5F"}}, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
-    s2(qrStart+1+i,2, r.ceo_tenure_years?`${r.ceo_tenure_years}yr`:"", { font:FONT_BASE, fill:rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
-    s2(qrStart+1+i,3, predLabel,                     { font:predFont, fill:predFill, alignment:{horizontal:"center",vertical:"top",wrapText:true}, border:BDR() });
-    s2(qrStart+1+i,4, r.confidence||"",              { font:FONT_CONF[confKey]||FONT_BASE, fill:FILL_CONF[confKey]||rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
-    s2(qrStart+1+i,5, r.revenue||"",                 { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top"}, border:BDR() });
-    s2(qrStart+1+i,6, r.tsr_1yr||"",                 { font:FONT_BASE, fill:rowFill, alignment:{horizontal:"center",vertical:"top"}, border:BDR() });
-    s2(qrStart+1+i,7, OWN_LABEL[r.ownership_category]||r.ownership_category||"", { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
-    s2(qrStart+1+i,8, r.sector||"",                  { font:FONT_BASE, fill:rowFill, alignment:{vertical:"top",wrapText:true}, border:BDR() });
-  });
-
-  ws2["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:qrStart+results.length, c:8} });
-  ws2["!cols"] = [{ wch:26 },{ wch:22 },{ wch:12 },{ wch:22 },{ wch:12 },{ wch:14 },{ wch:12 },{ wch:20 },{ wch:18 }];
-  ws2["!rows"] = [
-    { hpt:34 },{ hpt:16 },{ hpt:8 },
-    { hpt:18 },{ hpt:40 },{ hpt:8 },{ hpt:8 },
-    { hpt:8 },
-    { hpt:20 },...predOrder.map(()=>({ hpt:20 })),
-    ...Array(6).fill({ hpt:8 }),
-    { hpt:28 },...results.map(()=>({ hpt:36 }))
-  ];
-  ws2["!merges"] = [
-    { s:{r:0,c:0}, e:{r:0,c:8} },
-    { s:{r:1,c:0}, e:{r:1,c:8} },
-  ];
-
+  const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
+  ws2["!cols"] = [{wch:32},{wch:22},{wch:14},{wch:24},{wch:14},{wch:14},{wch:12},{wch:22},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws2, "Summary");
 
-  // ── Write file ────────────────────────────────────────────────────────────
+  // ── Download ──────────────────────────────────────────────────────────────
   XLSX.writeFile(wb, `CEO_Succession_Analysis_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
@@ -2270,10 +2017,9 @@ export default function App(){
     const isExcel = /\.(xlsx|xls|xlsm)$/i.test(f.name);
     try {
       if(isExcel){
-        // xlsx-js-style UMD bundle needs Uint8Array, not ArrayBuffer
-        const buf  = await f.arrayBuffer();
-        const data = new Uint8Array(buf);
-        const wb   = XLSX.read(data, {type:"array"});
+        // SheetJS 0.18.5 accepts ArrayBuffer directly with type:"array"
+        const buf = await f.arrayBuffer();
+        const wb  = XLSX.read(buf, {type:"array"});
         const ws   = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
         const header = rows[0]?.map(h=>String(h).toLowerCase().trim()) || [];
