@@ -568,7 +568,7 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
   // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure
   // is correctly treated as a completed transition, not a pending one.
   const _tenureNum = parseFloat(String(d.ceo_tenure_years).replace("~",""));
-  if (!isNaN(_tenureNum) && _tenureNum <= 1) {
+  if (!isNaN(_tenureNum) && _tenureNum <= 1.5) {
     console.log("[v8 FIX] tenure",_tenureNum,"< 1yr — clearing all transition flags for",d.ceo_name);
     d.incoming_ceo_announced  = "no";
     d.incoming_ceo_name       = "N/A";
