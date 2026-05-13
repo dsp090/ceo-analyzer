@@ -537,19 +537,19 @@ Return ONLY valid JSON.`,
 CEO Name in data: ${d.ceo_name}
 Successor in data: ${d.incoming_ceo_name}
 Departure announced: ${d.ceo_departure_announced}
+Ownership: ${d.ownership_category}
 
-1. Is "${d.ceo_name}" the correct current CEO or Executive Chairman running the business? If wrong, provide the correct name.
-2. Has a named successor been publicly announced that is missing from this data?
-3. Is the ownership category "${d.ownership_category}" correct?
+IMPORTANT: Do NOT change the CEO name. The research agent already used live web search to identify the CEO.
+Your job here is ONLY to:
+1. Check if a named successor has been publicly announced that is missing — answer successor_missing true/false.
+2. Check if the ownership category is correct — answer ownership_correct true/false.
+Always return ceo_correct=true regardless. Never suggest a correct_ceo.
 
-Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"correct_successor":"","ownership_correct":true/false,"correct_ownership":""}`,
+Return: {"ceo_correct":true,"correct_ceo":"","successor_missing":false,"correct_successor":"","ownership_correct":true/false,"correct_ownership":""}`,
       true  // webSearch=true — use live search, not training memory
     );
     const qc = parseJSON(qcRaw, {});
-    if (qc.ceo_correct === false && qc.correct_ceo) {
-      d.ceo_name = qc.correct_ceo;
-      d._qc_name_corrected = true; // QC fixed a wrong name — not a real CEO transition
-    }
+    // CEO name is NOT changed by QC — research agent web search is authoritative for identity
     if (qc.successor_missing && qc.correct_successor) {
       d.incoming_ceo_name = qc.correct_successor;
       d.incoming_ceo_announced = "yes";
@@ -799,13 +799,11 @@ async function agentPrediction(data, finance, press, industry) {
   // If a departure was announced: rationale is about the DEPARTING CEO.
   // If transition is complete: _ceo_name_pre_qc is the old/departed CEO.
   // If no transition: rationaleCEO = current CEO.
-  // rationaleCEO = who the rationale names.
-  // Only use _ceo_name_pre_qc as the departed CEO when it was a REAL transition,
-  // not when QC merely corrected a wrong name (_qc_name_corrected = true).
+  // rationaleCEO = the CEO the rationale should reference.
+  // Uses _ceo_name_pre_qc as the departed CEO only for real transitions.
   const rationaleCEO = (data._transition_complete || data.ceo_departure_announced === "yes")
     && data._ceo_name_pre_qc
     && data._ceo_name_pre_qc !== data.ceo_name
-    && !data._qc_name_corrected
       ? data._ceo_name_pre_qc
       : data.ceo_name;
 
@@ -939,7 +937,7 @@ async function agentPrediction(data, finance, press, industry) {
   const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
   if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
     // Only treat pre-QC name as departed CEO for real transitions, not QC corrections
-    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name && !data._qc_name_corrected)
+    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc : null;
     const rationale = departedCEO
       ? `${departedCEO} formally announced departure and the leadership transition has since completed. ${rationaleCEO} is the newly appointed CEO with ${data.ceo_tenure_years} years in the role. Succession risk is currently low — the board has resolved the transition.`
@@ -1377,7 +1375,7 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name && !data._qc_name_corrected)
+    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc
       : "",
     transition_complete: data._transition_complete || false,
