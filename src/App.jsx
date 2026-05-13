@@ -548,10 +548,7 @@ Return: {"ceo_correct":true/false,"correct_ceo":"","successor_missing":false,"co
     const qc = parseJSON(qcRaw, {});
     if (qc.ceo_correct === false && qc.correct_ceo) {
       d.ceo_name = qc.correct_ceo;
-      // Clear credentials that belonged to the old CEO — must not show against the corrected name
-      d.ceo_age          = "";
-      d.ceo_start_date   = "";
-      d.ceo_tenure_years = "";
+      d._qc_name_corrected = true; // QC fixed a wrong name — not a real CEO transition
     }
     if (qc.successor_missing && qc.correct_successor) {
       d.incoming_ceo_name = qc.correct_successor;
@@ -802,9 +799,13 @@ async function agentPrediction(data, finance, press, industry) {
   // If a departure was announced: rationale is about the DEPARTING CEO.
   // If transition is complete: _ceo_name_pre_qc is the old/departed CEO.
   // If no transition: rationaleCEO = current CEO.
+  // rationaleCEO = who the rationale names.
+  // Only use _ceo_name_pre_qc as the departed CEO when it was a REAL transition,
+  // not when QC merely corrected a wrong name (_qc_name_corrected = true).
   const rationaleCEO = (data._transition_complete || data.ceo_departure_announced === "yes")
     && data._ceo_name_pre_qc
     && data._ceo_name_pre_qc !== data.ceo_name
+    && !data._qc_name_corrected
       ? data._ceo_name_pre_qc
       : data.ceo_name;
 
@@ -937,7 +938,8 @@ async function agentPrediction(data, finance, press, industry) {
   // BUT: if the new CEO is interim, do NOT suppress — let Rule C handle it as high_likelihood.
   const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
   if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
-    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+    // Only treat pre-QC name as departed CEO for real transitions, not QC corrections
+    const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name && !data._qc_name_corrected)
       ? data._ceo_name_pre_qc : null;
     const rationale = departedCEO
       ? `${departedCEO} formally announced departure and the leadership transition has since completed. ${rationaleCEO} is the newly appointed CEO with ${data.ceo_tenure_years} years in the role. Succession risk is currently low — the board has resolved the transition.`
@@ -1375,7 +1377,7 @@ async function runPipeline(company, ticker, log) {
     ceo_departure_announced:data.ceo_departure_announced, incoming_ceo_announced:data.incoming_ceo_announced,
     incoming_ceo_name:data.incoming_ceo_name, incoming_ceo_background:data.incoming_ceo_background,
     incoming_ceo_start_date:data.incoming_ceo_start_date,
-    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
+    departed_ceo_name: (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name && !data._qc_name_corrected)
       ? data._ceo_name_pre_qc
       : "",
     transition_complete: data._transition_complete || false,
