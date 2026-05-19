@@ -3,6 +3,8 @@
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
 // PATCH 4: new_ceo_appointed only if tenure < 1yr (changed from <= 1.5)
 // PATCH 3: Executive Chairman now treated as CEO-equivalent in TITLE RULE
+// PATCH 5: safeStr in Blist/AgentView + flattenItem in agentPress — fixes {name/description} objects in UI
+// PATCH 6: press signal word limit increased 25→60 to prevent mid-sentence truncation
 // PATCH 5: safeStr in Blist and AgentView now extracts .description/.name from objects
 import { useState, useRef, useEffect } from "react";
 
@@ -116,11 +118,17 @@ function normaliseRevenue(s) {
 }
 
 // ── Portkey call ──────────────────────────────────────────────────────────────
+// Cache-bust strategy (4 layers):
+//   1. x-portkey-cache: no-cache         — tells Portkey never to serve cached response
+//   2. x-portkey-cache-force-refresh     — bypasses any existing cached entry
+//   3. nonce in sys prompt               — unique token fingerprint per call
+//   4. CURRENT TIME in user prompt       — makes prompt string unique every call
 async function callLLM(sys, usr, webSearch=false) {
   const now   = new Date();
   const ts    = now.toTimeString().slice(0,8);
   const nonce = `[REQ-${Date.now()}-${Math.random().toString(36).slice(2,7)}]`;
 
+  // ── What we are sending ───────────────────────────────────────────────────
   console.group(`%c🔵 callLLM [${nonce}] webSearch=${webSearch}`, "color:#3B82F6;font-weight:bold");
   console.log("⏰ Time:",          ts);
   console.log("📤 System (first 120):", sys.slice(0,120).replace(/\n/g," "));
@@ -153,6 +161,7 @@ async function callLLM(sys, usr, webSearch=false) {
 
   const elapsed = Date.now() - t0;
 
+  // ── Response diagnostics ──────────────────────────────────────────────────
   const cacheHdr  = r.headers.get("x-portkey-cache")        || "none";
   const cacheHit  = r.headers.get("x-portkey-cache-status") || "none";
   const reqId     = r.headers.get("x-request-id")           || "none";
@@ -734,9 +743,9 @@ investor_activism: full summary of any named activist position and demands, or "
   };
   const toStr = arr => (Array.isArray(arr)?arr:[]).map(flattenItem).filter(Boolean);
 
-  r.signals      = lst(toStr(r.signals), 4, 25);
-  r.concerns     = lst(toStr(r.concerns), 3, 25);
-  r.controversies= lst(toStr(r.controversies), 4, 25);
+  r.signals      = lst(toStr(r.signals), 4, 60);
+  r.concerns     = lst(toStr(r.concerns), 3, 60);
+  r.controversies= lst(toStr(r.controversies), 4, 60);
   r.investor_activism = cl(r.investor_activism||"None identified", 20)||"None identified";
 
   const generic = ["typical for","no credible","no major","not identified","no report","governance scrutiny","generally","standard"];
