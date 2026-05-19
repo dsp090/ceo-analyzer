@@ -3,6 +3,7 @@
 // PATCH 2: tenure boundary changed from < 1.5 to <= 1.5 in agentResearch + agentPrediction
 // PATCH 4: new_ceo_appointed only if tenure < 1yr (changed from <= 1.5)
 // PATCH 3: Executive Chairman now treated as CEO-equivalent in TITLE RULE
+// PATCH 5: safeStr in Blist and AgentView now extracts .description/.name from objects
 import { useState, useRef, useEffect } from "react";
 
 // SheetJS loaded via script tag for reliable global access
@@ -115,17 +116,11 @@ function normaliseRevenue(s) {
 }
 
 // ── Portkey call ──────────────────────────────────────────────────────────────
-// Cache-bust strategy (4 layers):
-//   1. x-portkey-cache: no-cache         — tells Portkey never to serve cached response
-//   2. x-portkey-cache-force-refresh     — bypasses any existing cached entry
-//   3. nonce in sys prompt               — unique token fingerprint per call
-//   4. CURRENT TIME in user prompt       — makes prompt string unique every call
 async function callLLM(sys, usr, webSearch=false) {
   const now   = new Date();
   const ts    = now.toTimeString().slice(0,8);
   const nonce = `[REQ-${Date.now()}-${Math.random().toString(36).slice(2,7)}]`;
 
-  // ── What we are sending ───────────────────────────────────────────────────
   console.group(`%c🔵 callLLM [${nonce}] webSearch=${webSearch}`, "color:#3B82F6;font-weight:bold");
   console.log("⏰ Time:",          ts);
   console.log("📤 System (first 120):", sys.slice(0,120).replace(/\n/g," "));
@@ -158,7 +153,6 @@ async function callLLM(sys, usr, webSearch=false) {
 
   const elapsed = Date.now() - t0;
 
-  // ── Response diagnostics ──────────────────────────────────────────────────
   const cacheHdr  = r.headers.get("x-portkey-cache")        || "none";
   const cacheHit  = r.headers.get("x-portkey-cache-status") || "none";
   const reqId     = r.headers.get("x-request-id")           || "none";
@@ -223,8 +217,6 @@ Give real numbers based on your web search results. If web search returns no dat
 }
 
 // ── CEO Overrides ────────────────────────────────────────────────────────────
-// Add entries here when web search persistently returns the wrong CEO.
-// These bypass web search entirely and skip QC for that company.
 const CEO_OVERRIDES = [
   {
     match: "cds superstores",
@@ -244,10 +236,8 @@ async function fetchCEONews(company) {
   const today = new Date().toDateString();
   const yr    = new Date().getFullYear();
 
-  // Check if this company has an override entry
   const override = getCEOOverride(company);
 
-  // CRITICAL: sys prompt explicitly forbids using training memory for CEO identity
   const sys = `You are a corporate intelligence expert. Today is ${today}.
 YOU MUST USE YOUR WEB SEARCH TOOL TO ANSWER THESE QUESTIONS.
 DO NOT answer from your training memory — your training data about who is CEO of any company is OUTDATED and WRONG.
@@ -289,13 +279,11 @@ Q5. TRANSITION STATUS: Is a transition underway, complete, or none?
 
 REPORT ONLY WHAT THE WEB SEARCH RETURNS. Do not supplement with training knowledge.`;
 
-  // Only ONE call — web search only, no training fallback
   try {
     const r1 = await callLLM(sys, prompt, true);
     if (r1 && r1.length > 30) {
       console.log(`\n🌐 [fetchCEONews] RAW WEB RESULT for "${company}":\n`, r1.slice(0, 500));
 
-      // If override exists, apply unconditionally — web search is unreliable for this company
       if (override) {
         console.log(`[CEO_OVERRIDE] Applying verified override for "${company}": CEO=${override.ceo}`);
         return `LIVE WEB SEARCH RESULTS:
@@ -504,7 +492,6 @@ OWNERSHIP DETECTION GUIDE:
 
   const d = parseJSON(raw, fallback);
 
-  // ── DEBUG: show what the model extracted from web context ─────────────────
   console.log(`\n🔍 [agentResearch] "${company}" extracted from web context:`);
   console.log(`   CEO:       "${d.ceo_name}"`);
   console.log(`   Departure: "${d.ceo_departure_announced}"`);
@@ -512,7 +499,6 @@ OWNERSHIP DETECTION GUIDE:
   console.log(`   Ownership: "${d.ownership_category}"`);
   console.log(`   Raw JSON (first 300):`, raw.slice(0,300));
 
-  // Clean and clamp all fields
   d.sector             = cl(d.sector, 8);
   d.ceo_name           = cl(d.ceo_name, 8);
   d.ceo_start_date     = cl(d.ceo_start_date, 8);
@@ -530,28 +516,20 @@ OWNERSHIP DETECTION GUIDE:
                    "ceo_contract_expiry","contract_renewed","mandate_signals"])
     d[f] = cl(d[f]||"not clearly inferable", 16) || "not clearly inferable";
 
-  // Fallback: if incoming announced but name still blank
   if (d.incoming_ceo_announced === "yes" && (!d.incoming_ceo_name || d.incoming_ceo_name === "N/A"))
     d.incoming_ceo_name = "Successor named — see rationale";
 
-  // Always recompute tenure from start date
   const computed = calcTenure(d.ceo_start_date);
   if (computed) d.ceo_tenure_years = computed;
 
-  // ── FIX 1: Snapshot the CEO name BEFORE QC can mutate it ─────────────────
   d._ceo_name_pre_qc = d.ceo_name;
 
-  // Skip QC entirely for override companies — override is already correct
   const _hasOverride = !!getCEOOverride(company);
   if (_hasOverride) {
     d._profile_qc = "override";
     console.log(`[CEO_OVERRIDE] Skipping QC for "${company}"`);
   }
 
-  // ── Embedded QC: verify CEO name + successor against live web search ────────
-  // webSearch=true so QC uses fresh live data rather than training memory,
-  // preventing it from silently overwriting a correct web-sourced CEO name
-  // with a stale trained one.
   if (!_hasOverride) try {
     const qcRaw = await callLLM(
       `You are a QC analyst. Today is ${today}.
@@ -577,10 +555,9 @@ Your job here is ONLY to:
 Always return ceo_correct=true regardless. Never suggest a correct_ceo.
 
 Return: {"ceo_correct":true,"correct_ceo":"","successor_missing":false,"correct_successor":"","ownership_correct":true/false,"correct_ownership":""}`,
-      true  // webSearch=true — use live search, not training memory
+      true
     );
     const qc = parseJSON(qcRaw, {});
-    // CEO name is NOT changed by QC — research agent web search is authoritative for identity
     if (qc.successor_missing && qc.correct_successor) {
       d.incoming_ceo_name = qc.correct_successor;
       d.incoming_ceo_announced = "yes";
@@ -588,7 +565,6 @@ Return: {"ceo_correct":true,"correct_ceo":"","successor_missing":false,"correct_
     if (qc.ownership_correct === false && qc.correct_ownership) d.ownership_category = qc.correct_ownership;
     d._profile_qc = "verified";
 
-    // ── DEBUG: show what QC decided ──────────────────────────────────────────
     console.log(`\n✅ [agentResearch QC] "${company}" after QC:`);
     console.log(`   CEO before QC: "${d._ceo_name_pre_qc}"  →  after QC: "${d.ceo_name}"`);
     console.log(`   QC said ceo_correct=${qc.ceo_correct} | successor_missing=${qc.successor_missing}`);
@@ -598,9 +574,6 @@ Return: {"ceo_correct":true,"correct_ceo":"","successor_missing":false,"correct_
     console.error(`❌ [agentResearch QC] "${company}" QC call FAILED:`, e.message);
   }
 
-  // ── POST-QC CLEANUP — runs after QC has corrected ceo_name ───────────────
-  // PATCH 2: changed < 1.5 to <= 1.5 so that exactly 1.5yr tenure
-  // is correctly treated as a completed transition, not a pending one.
   const _tenureNum = parseFloat(String(d.ceo_tenure_years).replace("~",""));
   if (!isNaN(_tenureNum) && _tenureNum <= 1.5) {
     console.log("[v8 FIX] tenure",_tenureNum,"< 1yr — clearing all transition flags for",d.ceo_name);
@@ -740,18 +713,27 @@ Return this JSON:
 }
 
 view: high_influence | medium_influence | weak_influence | no_clear_influence
-signals: up to 4 items — SPECIFIC and NAMED
-concerns: up to 3 concrete external pressure risks
-controversies: up to 4 named events
+signals: up to 4 items — SPECIFIC and NAMED — each item must be a plain string, NOT an object
+concerns: up to 3 concrete external pressure risks — plain strings only
+controversies: up to 4 named events — plain strings only
 investor_activism: full summary of any named activist position and demands, or "None identified"
 
-⚠ CRITICAL: Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`,
-    true  // webSearch=true — live search for current activist/press signals
+⚠ CRITICAL: Every item must be a plain text string. Do NOT return objects with name/description fields.
+⚠ Every item must name a specific fund, person, regulator, or event. If nothing specific is known, return empty arrays — do NOT invent generic observations.`,
+    true
   );
 
   const r = parseJSON(raw, fallback);
   r.view = cl(r.view||"no_clear_influence", 3);
-  const toStr = arr => (Array.isArray(arr)?arr:[]).map(x => typeof x === "object" ? JSON.stringify(x) : String(x||"")).filter(Boolean);
+
+  // ── PATCH 5: flatten objects to readable strings before further processing ──
+  const flattenItem = v => {
+    if (!v) return "";
+    if (typeof v === "object") return v.description || v.name || v.summary || Object.values(v).filter(Boolean).join(" — ");
+    return String(v);
+  };
+  const toStr = arr => (Array.isArray(arr)?arr:[]).map(flattenItem).filter(Boolean);
+
   r.signals      = lst(toStr(r.signals), 4, 25);
   r.concerns     = lst(toStr(r.concerns), 3, 25);
   r.controversies= lst(toStr(r.controversies), 4, 25);
@@ -776,7 +758,7 @@ Investor activism detail: ${r.investor_activism}
 Are these activist claims specific and verifiable (named fund, named person, specific event)?
 Flag any that are generic, invented, or unverifiable.
 Return: {"all_specific":true/false,"generic_items":[],"confirmed_activist":""}`,
-        true  // webSearch=true — verify claims against live sources
+        true
       );
       const chk = parseJSON(chkRaw, {});
       if (chk.all_specific === false && Array.isArray(chk.generic_items)) {
@@ -805,8 +787,8 @@ Return:
 {"view":"","signals":[],"concerns":[]}
 
 view: high_influence | medium_influence | weak_influence | no_clear_influence
-signals: up to 3 SPECIFIC industry dynamics affecting this CEO's tenure
-concerns: up to 2 specific risks
+signals: up to 3 SPECIFIC industry dynamics affecting this CEO's tenure — plain strings only
+concerns: up to 2 specific risks — plain strings only
 ⚠ Be specific to this company and sector — no generic observations.`
   );
 
@@ -826,12 +808,6 @@ concerns: up to 2 specific risks
 async function agentPrediction(data, finance, press, industry) {
   const fallback = { prediction:"low_likelihood", confidence:"low", analytical_rationale:"" };
 
-  // rationaleCEO = the CEO the rationale should reference.
-  // If a departure was announced: rationale is about the DEPARTING CEO.
-  // If transition is complete: _ceo_name_pre_qc is the old/departed CEO.
-  // If no transition: rationaleCEO = current CEO.
-  // rationaleCEO = the CEO the rationale should reference.
-  // Uses _ceo_name_pre_qc as the departed CEO only for real transitions.
   const rationaleCEO = (data._transition_complete || data.ceo_departure_announced === "yes")
     && data._ceo_name_pre_qc
     && data._ceo_name_pre_qc !== data.ceo_name
@@ -843,9 +819,6 @@ async function agentPrediction(data, finance, press, industry) {
     data.incoming_ceo_announced === "yes"
   );
 
-  // ── Rule 0: Interim / Acting CEO → High Likelihood (overrides ALL ownership rules) ──
-  // An interim CEO signals no permanent leader regardless of ownership type.
-  // This fires BEFORE family/PE/government gates so it is never suppressed by ownership.
   const _isInterimStr = (s) => {
     if (!s) return false;
     const l = String(s).toLowerCase();
@@ -872,8 +845,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-
-  // ── Rule 1a: Family / Founder-led — structurally low ─────────────────────
   const isFounderFamily = [
     "founder_ceo",
     "family_ceo",
@@ -901,7 +872,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Rule 1b: PE-owned — structurally low ─────────────────────────────────
   else if (data.ownership_category === "private_equity_owned" && !solidProofOfChange) {
     return {
       prediction: "low_likelihood",
@@ -910,7 +880,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Rule 1c: Government / State-owned — structurally low ─────────────────
   else if (["government_controlled","state_owned_enterprise"].includes(data.ownership_category) && !solidProofOfChange) {
     const ownershipDesc = data.ownership_category === "state_owned_enterprise" ? "a state-owned enterprise" : "a government-controlled company";
     const ownershipRationale = data.ownership_category === "state_owned_enterprise"
@@ -923,7 +892,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rule 2: Departure announced + named successor confirmed → Transition Underway
   if (data.ceo_departure_announced === "yes" && data.incoming_ceo_announced === "yes") {
     const succ = data.incoming_ceo_name && data.incoming_ceo_name !== "N/A" ? data.incoming_ceo_name : "a named successor";
     const bg   = data.incoming_ceo_background && data.incoming_ceo_background !== "N/A" ? ` (${data.incoming_ceo_background})` : "";
@@ -935,7 +903,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rule 3: Departure announced but no named successor yet → High Likelihood
   if (data.ceo_departure_announced === "yes") {
     return {
       prediction: "high_likelihood",
@@ -944,12 +911,9 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Compute tenure once — used by Rules 4, 5, 5b ─────────────────────────
   const tenureNum = parseFloat(String(data.ceo_tenure_years).replace("~",""));
-  // PATCH 4: new_ceo_appointed only fires for tenure < 1yr
   const newlyInSeat = !isNaN(tenureNum) && tenureNum <= 1;
 
-  // Rule 4: Incoming CEO announced — BUT only if they have NOT already started.
   const samePersonAlready = data.incoming_ceo_name &&
     data.ceo_name &&
     data.incoming_ceo_name.trim().toLowerCase() === data.ceo_name.trim().toLowerCase();
@@ -963,11 +927,8 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // Rules 5 / 5b: New CEO already in seat (tenure < 1yr) — transition complete.
-  // BUT: if the new CEO is interim, do NOT suppress — let Rule C handle it as high_likelihood.
   const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
   if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
-    // Only treat pre-QC name as departed CEO for real transitions, not QC corrections
     const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc : null;
     const rationale = departedCEO
@@ -976,7 +937,6 @@ async function agentPrediction(data, finance, press, industry) {
     return { prediction: "new_ceo_appointed", confidence: "high", analytical_rationale: rationale };
   }
 
-  // ── Hardcoded Rule: age >= 58 AND tenure >= 5 → high_likelihood ─────────
   const age = parseInt(data.ceo_age) || 0;
   const ten = tenureNum || 0;
   if (age >= 58 && ten >= 5) {
@@ -987,7 +947,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Rule A: Age ≥ 60 + below-peer TSR (3yr) → High Likelihood ───────────
   const tsrBelowPeers = (s) => {
     if (!s || ni(s)) return false;
     const l = s.toLowerCase();
@@ -1007,9 +966,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Rule B: Tenure ≥ 5yr + below-peer TSR (3yr) → High Likelihood ─────────
-  // Check both data.tsr_vs_peers (from agentResearch) and finance.tsr_vs_peers (from agentFinance)
-  // since the finance agent often has richer peer comparison data
   const _tsrPeers = (!ni(data.tsr_vs_peers) ? data.tsr_vs_peers : "") + " " +
                     (!ni(finance.tsr_vs_peers) ? finance.tsr_vs_peers : "");
   if (ten >= 5 && tsrBelowPeers(_tsrPeers)) {
@@ -1021,8 +977,6 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  // ── Rule C: Interim CEO → High Likelihood ─────────────────────────────────
-  // Checks all fields that could surface "interim" / "acting" / "temporary"
   const isInterim = (s) => {
     if (!s) return false;
     const l = String(s).toLowerCase();
@@ -1048,8 +1002,6 @@ async function agentPrediction(data, finance, press, industry) {
       analytical_rationale: `${rationaleCEO} is serving as interim/acting CEO, indicating the board has not yet identified or confirmed a permanent successor. Interim appointments represent structurally elevated succession risk — a permanent CEO search is either underway or imminent.`
     };
   }
-
-  // ── LLM SCORING — for all other non-obvious cases ────────────────────────
 
   const raw = await callLLM(
     `You are a CEO succession risk expert at a top institutional investor. Today is ${new Date().toDateString()}.
@@ -1142,13 +1094,11 @@ analytical_rationale: 4–6 sentences citing SPECIFIC data points (actual age, t
   r.analytical_rationale = cl(r.analytical_rationale||"", 80);
   r.investor_impact      = cl(r.investor_impact||"", 8);
 
-  // ── Name correction ───────────────────────────────────────────────────────
   if (rationaleCEO && data.ceo_name && rationaleCEO !== data.ceo_name &&
       r.analytical_rationale.includes(data.ceo_name)) {
     r.analytical_rationale = r.analytical_rationale.split(data.ceo_name).join(rationaleCEO);
   }
 
-  // ── Embedded Challenge ────────────────────────────────────────────────────
   try {
     const chalRaw = await callLLM(
       `You are a devil's advocate. Challenge the prediction below — find the strongest reason it could be wrong. Return ONLY valid JSON.`,
@@ -1322,7 +1272,6 @@ async function runPipeline(company, ticker, log) {
   const webCtx = await fetchCEONews(company);
   const finCtx = await fetchFinancialData(company, ticker);
 
-  // ── DEBUG: show what the web search actually returned ─────────────────────
   console.log(`\n${"─".repeat(60)}`);
   console.log(`🏢 PIPELINE START: "${company}"`);
   console.log(`📡 Web context (first 400 chars):\n`, webCtx.slice(0,400));
@@ -1330,7 +1279,6 @@ async function runPipeline(company, ticker, log) {
   log(p=>[...p,`[${company}] 2/6 Profile Structuring — building CEO profile...`]);
   const data = await agentResearch(company, ticker, webCtx + "\n\nFINANCIAL DATA:\n" + finCtx);
 
-  // ── DEBUG: final CEO profile after all QC ─────────────────────────────────
   console.log(`\n📋 FINAL PROFILE for "${company}":`);
   console.log(`   CEO:        "${data.ceo_name}"  (pre-QC: "${data._ceo_name_pre_qc}")`);
   console.log(`   Tenure:     ${data.ceo_tenure_years}yr  Start: ${data.ceo_start_date}`);
@@ -1342,7 +1290,6 @@ async function runPipeline(company, ticker, log) {
   if(data.ceo_departure_announced==="yes")
     log(p=>[...p,`[${company}]     ⚠ Departure announced — departing CEO: ${data._ceo_name_pre_qc || data.ceo_name}`]);
 
-  // ── Attach company + ticker to data so downstream agents have them ─────────
   data.company = company;
   data.ticker  = ticker || "";
 
@@ -1369,7 +1316,6 @@ async function runPipeline(company, ticker, log) {
 
   log(p=>[...p,`[${company}] ✅ Complete`]);
 
-  // ── DEBUG: final summary ──────────────────────────────────────────────────
   console.log(`\n🏁 FINAL RESULT for "${company}":`);
   console.log(`   CEO: "${data.ceo_name}" | Prediction: ${pred.prediction} | Confidence: ${pred.confidence}`);
   console.log(`   Rationale: "${pred.analytical_rationale.slice(0,150)}..."`);
@@ -1683,10 +1629,15 @@ function KV({label,val,hi=false}){
   );
 }
 
+// ── PATCH 5: safeStr now extracts .description or .name from objects ──────────
 function AgentView({label,view,signals=[],concerns=[]}){
   const col=VIEW_COLOR[view]||C.mid;
   const isHigh = view==="high_influence";
-  const safeStr = v => (v && typeof v === "object") ? JSON.stringify(v) : String(v||"");
+  const safeStr = v => {
+    if (!v) return "";
+    if (typeof v === "object") return v.description || v.name || v.summary || Object.values(v).filter(Boolean).join(" — ");
+    return String(v);
+  };
   return(
     <div style={{
       background:C.white,
@@ -1718,8 +1669,13 @@ function AgentView({label,view,signals=[],concerns=[]}){
   );
 }
 
+// ── PATCH 5: safeStr now extracts .description or .name from objects ──────────
 function Blist({items,col=C.red}){
-  const safeStr = v => (v && typeof v === "object") ? JSON.stringify(v) : String(v||"");
+  const safeStr = v => {
+    if (!v) return "";
+    if (typeof v === "object") return v.description || v.name || v.summary || Object.values(v).filter(Boolean).join(" — ");
+    return String(v);
+  };
   return items.filter(item=>item&&safeStr(item).length>2).map((item,i)=>(
     <div key={i} style={{display:"flex",gap:9,marginBottom:8,fontSize:14,color:C.slate,alignItems:"flex-start",lineHeight:1.5}}>
       <span style={{color:col,fontWeight:700,flexShrink:0,fontSize:10,marginTop:3}}>—</span>
@@ -1786,7 +1742,6 @@ function Detail({r}){
           ))}
         </div>
 
-        {/* Show departed CEO name when QC corrected to new CEO */}
         {r.departed_ceo_name&&(
           <div style={{marginBottom:6,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:5,padding:"6px 12px",fontSize:11,color:"#92400E"}}>
             Departed CEO: <strong>{r.departed_ceo_name}</strong> · Succeeded by: <strong>{r.ceo_name}</strong>
