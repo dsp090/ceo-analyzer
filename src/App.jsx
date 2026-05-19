@@ -5,6 +5,7 @@
 // PATCH 3: Executive Chairman now treated as CEO-equivalent in TITLE RULE
 // PATCH 5: safeStr in Blist/AgentView + flattenItem in agentPress — fixes {name/description} objects in UI
 // PATCH 6: press signal word limit increased 25→60 to prevent mid-sentence truncation
+// PATCH 7: interim CEO check narrowed to ceo_name+mandate_signals only (was full signal text — caused false positives)
 // PATCH 5: safeStr in Blist and AgentView now extracts .description/.name from objects
 import { useState, useRef, useEffect } from "react";
 
@@ -846,7 +847,7 @@ async function agentPrediction(data, finance, press, industry) {
     ...(press.signals               || []),
     ...(industry.signals            || []),
   ].join(" ");
-  if (_isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText)) {
+  if (_isInterimStr(data.ceo_name) || _isInterimStr(data.mandate_signals)) {
     return {
       prediction: "high_likelihood",
       confidence: "high",
@@ -936,7 +937,7 @@ async function agentPrediction(data, finance, press, industry) {
     };
   }
 
-  const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(_allSignalText);
+  const _newCeoIsInterim = _isInterimStr(data.ceo_name) || _isInterimStr(data.mandate_signals);
   if ((newlyInSeat || samePersonAlready) && !_newCeoIsInterim) {
     const departedCEO = (data._ceo_name_pre_qc && data._ceo_name_pre_qc !== data.ceo_name)
       ? data._ceo_name_pre_qc : null;
@@ -1004,7 +1005,7 @@ async function agentPrediction(data, finance, press, industry) {
     ...(press.signals               || []),
     ...(industry.signals            || []),
   ].join(" ");
-  if (isInterim(data.ceo_name) || isInterim(allSignalText)) {
+  if (isInterim(data.ceo_name) || isInterim(data.mandate_signals)) {
     return {
       prediction: "high_likelihood",
       confidence: "high",
