@@ -2306,7 +2306,7 @@ export default function App(){
                 {iTab==="manual"?(
                   <>
                     <textarea value={txt} onChange={e=>setTxt(e.target.value)} rows={3}
-                      placeholder={"Company Name, TICKER\nAnother Company, TICK\nThird Company, TIC"}
+                      placeholder={"Apple Inc, AAPL\n Walt Disney, DIS\nMicrosoft, MSFT"}
                       style={{flex:1,borderRadius:5,border:`1px solid ${C.border}`,padding:"8px 12px",fontSize:13,color:C.ink,background:C.white,fontFamily:"'Inter',monospace",resize:"none",lineHeight:1.6}}
                     />
                     <div style={{fontSize:12,color:C.mid,lineHeight:2,whiteSpace:"nowrap",flexShrink:0}}>One per line<br/>Name, TICKER<br/>Max 20</div>
